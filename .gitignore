@@ -41,7 +41,7 @@ go.work.sum
 /bin/
 /calbridge
 /dev/
-secrets/
+/secrets/
 token*.json
 google-client*.json
 client_secret*.json
