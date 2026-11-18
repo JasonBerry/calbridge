@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/123456789/calendars/0A1B2C3D-TEST/calbridge-aaa.ics</href>
+    <propstat><prop><getetag>"etag-a2"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat>
+  </response>
+  <response>
+    <href>/123456789/calendars/0A1B2C3D-TEST/</href>
+    <status>HTTP/1.1 507 Insufficient Storage</status>
+  </response>
+  <sync-token>https://example.invalid/ns/sync/301</sync-token>
+</multistatus>

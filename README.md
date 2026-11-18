@@ -4,7 +4,7 @@ Mirrors Google Calendar invitations sent to a hidden Google account (`user@YOUR_
 existing iCloud calendar over CalDAV, and sends RSVP changes made in Apple Calendar back to the
 organizer through the Google Calendar API.
 
-Status: **Phase 0 (de-risking).** Only the `auth` command and the hidden `spike …` experiment
+Status: **Phase 0 (de-risking), milestones M0–M3 done.** Only the `auth` command and the hidden `spike …` experiment
 commands work so far. The sync engine is built after Phase 0 results are recorded in
 [docs/phase0-results.md](docs/phase0-results.md).
 

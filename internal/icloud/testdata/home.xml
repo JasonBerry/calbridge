@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/123456789/principal/</href>
+    <propstat>
+      <prop>
+        <calendar-home-set xmlns="urn:ietf:params:xml:ns:caldav"><href xmlns="DAV:">{{PARTITION}}/123456789/calendars/</href></calendar-home-set>
+        <calendar-user-address-set xmlns="urn:ietf:params:xml:ns:caldav">
+          <href xmlns="DAV:">mailto:user@YOUR_DOMAIN</href>
+          <href xmlns="DAV:">/123456789/principal/</href>
+          <href xmlns="DAV:">urn:uuid:00000000-0000-0000-0000-000000000000</href>
+        </calendar-user-address-set>
+        <schedule-inbox-URL xmlns="urn:ietf:params:xml:ns:caldav"><href xmlns="DAV:">{{PARTITION}}/123456789/calendars/inbox/</href></schedule-inbox-URL>
+        <schedule-outbox-URL xmlns="urn:ietf:params:xml:ns:caldav"><href xmlns="DAV:">{{PARTITION}}/123456789/calendars/outbox/</href></schedule-outbox-URL>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>

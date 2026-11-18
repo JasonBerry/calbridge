@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/123456789/calendars/0A1B2C3D-TEST/calbridge-aaa.ics</href>
+    <propstat><prop><getetag>"etag-a1"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat>
+  </response>
+  <response>
+    <href>/123456789/calendars/0A1B2C3D-TEST/user%20event.ics</href>
+    <propstat><prop><getetag>etag-b1</getetag></prop><status>HTTP/1.1 200 OK</status></propstat>
+  </response>
+  <sync-token>https://example.invalid/ns/sync/300</sync-token>
+</multistatus>

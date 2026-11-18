@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<error xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><C:no-uid-conflict><href>/123456789/calendars/0A1B2C3D-TEST/imported.ics</href></C:no-uid-conflict></error>
