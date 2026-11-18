@@ -42,7 +42,7 @@ func TestDefaultsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Google.CalendarID != "primary" || cfg.Google.Scope != ScopeEvents || cfg.Sync.Privacy != "honor_private" ||
+	if cfg.Google.CalendarID != "primary" || cfg.Google.Scope != ScopeEvents || cfg.Sync.Privacy != "full" ||
 		!cfg.ICloud.EmitVTimezone || !cfg.Sync.PushGoogleRSVPToICloud || cfg.Sync.Declined != "keep" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}

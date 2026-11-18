@@ -395,8 +395,8 @@ func TestRenderDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := cal.Children[0]
-	if s, _ := ev.Props.Text(ical.PropSummary); s != "Busy" {
-		t.Errorf("default privacy is not honor_private: summary %q", s)
+	if s, _ := ev.Props.Text(ical.PropSummary); s != "Doctor" {
+		t.Errorf("default privacy is not full: summary %q", s)
 	}
 	if g, _ := ev.Props.Text(PropGoogleCalendar); g != "primary" {
 		t.Errorf("default calendar id %q", g)

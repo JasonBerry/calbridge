@@ -609,8 +609,8 @@ Rules:
 
 | Mode | Behavior |
 |---|---|
-| `full` | Everything per §7.2. |
-| `honor_private` (**default**) | Events with Google `visibility` private/confidential render as SUMMARY `Busy`, no DESCRIPTION/LOCATION/URL/conference. Organizer/attendee still present so RSVP works (organizer email is visible to the sharee — acceptable? ask user). |
+| `full` (**default since 2026-11-19**, user decision: no privacy needed from the calendar sharee) | Everything per §7.2. |
+| `honor_private` (original default) | Events with Google `visibility` private/confidential render as SUMMARY `Busy`, no DESCRIPTION/LOCATION/URL/conference. Organizer/attendee still present so RSVP works (organizer email is visible to the sharee — acceptable? ask user). |
 | `busy_only` | All mirrors redacted as above. |
 
 ### 7.10 Loop prevention
@@ -831,7 +831,7 @@ sync:
   lookback: 720h                # 30 days
   include_organized_by_me: false
   declined: keep                # keep | delete   (P0-6)
-  privacy: honor_private        # full | honor_private | busy_only
+  privacy: full                 # full | honor_private | busy_only
   attendees: all                # all | self (P0-4 E)
   alarms: []                    # e.g. [10m] applied on create only
   push_google_rsvp_to_icloud: true
@@ -1066,7 +1066,7 @@ Backup: daily `VACUUM INTO '/var/lib/calbridge/backups/calbridge-YYYYMMDD.db'` f
 
 - Least privilege: Google scope `calendar.events` (or `calendar.events.owned` if P0-2 proves sufficient); never the full `calendar` scope. iCloud app-specific password is inherently full-account for CalDAV/CardDAV (cannot be scoped) — protect it accordingly, dedicated password named `calbridge` so it can be revoked alone.
 - Data at rest: SQLite contains raw Google event JSON (titles, descriptions, attendee emails of third parties). File 0600, service user only, disk encryption recommended on VPS. Prune cache rows 90 days after event end.
-- Sharee-visible data: mirrors land in a calendar shared with another person, so they see whatever the mirror contains: titles, descriptions (including Meet links and dial-in PINs), organizer name/email. Defaults: `privacy: honor_private`, all attendees (P0-4 E; the user does not need privacy from the sharee). Offer `busy_only` for full redaction. Note: RSVP controls are only on the user's devices, but whether the sharee could also RSVP on a shared calendar (and thereby respond on the user's behalf) is UNVERIFIED — check during P0-6/E2E.
+- Sharee-visible data: mirrors land in a calendar shared with another person, so they see whatever the mirror contains: titles, descriptions (including Meet links and dial-in PINs), organizer name/email. Defaults: `privacy: full`, all attendees (P0-4 E; the user does not need privacy from the sharee). Offer `busy_only` for full redaction. Note: RSVP controls are only on the user's devices, but whether the sharee could also RSVP on a shared calendar (and thereby respond on the user's behalf) is UNVERIFIED — check during P0-6/E2E.
 - Threat model (short):
   1. Stolen host → attacker gets Google calendar.events token (read/modify the user's Google calendar) and iCloud app password (read/write all the user's iCloud calendars & contacts). Mitigation: dedicated user, 0600, systemd hardening, revoke both on compromise (documented in README).
   2. Malicious invite content (huge description, weird RRULE, injection in ICS text) → strict escaping via go-ical encoder, length caps (description ≤ 32 KB, attendees ignored), RRULE parse errors → mirror as single event + warning.
@@ -1163,7 +1163,7 @@ context on every I/O call; table-driven tests; no global state except in main.
 |---|---|---|
 | Q1 | Which iCloud calendar should receive mirrors (display name)? | The user's main calendar, typically "Home" or "Calendar" — chosen via `calbridge calendars` output. |
 | Q2 | Mirror events the user organizes in the hidden Google account? | **No.** The user organizes from Apple; the hidden account should not own events. |
-| Q3 | Privacy level for the shared calendar? | `honor_private` (private Google events → "Busy"). |
+| Q3 | Privacy level for the shared calendar? | **Answered 2026-11-19: `full`** (originally defaulted to `honor_private`). |
 | Q4 | Show other guests' names in notes? | No. |
 | Q5 | Default alarms on mirrored events? | None added; preserve any the user adds in Apple. |
 | Q6 | Sync window: how far back? | 30 days back on full sync; forward unlimited (recurring series are mirrored whole). |
@@ -1193,7 +1193,7 @@ context on every I/O call; table-driven tests; no global state except in main.
 | R7 | iCloud CalDAV quirks (ETag quoting, missing ETag on PUT, content-type, sync-collection unsupported, undocumented rate limits). | Medium | Low–Medium | Own CalDAV layer, fixtures from real captures, ctag fallback, rate limiter. |
 | R8 | Recurrence translation bugs (time zones/EXDATE formats) mis-place events in a calendar another person relies on. | Medium | Medium | Golden tests incl. DST; trial in calbridge-test; M11 option to ship non-recurring first. |
 | R9 | Duplicates: user also clicks "Add to Calendar" on the emailed invite.ics; Apple Mail still shows the Google invite email. | Medium | Low | UID = iCalUID → iCloud UID conflict → adopt; README tells user to ignore/delete invite emails (or a Mail rule to file Google invitation emails). |
-| R10 | The sharee's view exposes third-party meeting details/PINs. | Certain in `full` mode | Low–Medium | `honor_private` default, `busy_only` option. |
+| R10 | The sharee's view exposes third-party meeting details/PINs. | Certain in `full` mode | Low–Medium | Accepted by the user (2026-11-19, `full` default); `honor_private` and `busy_only` remain options. |
 | R11 | go-ical has no tagged releases; go-webdav caldav client gaps. | Certain | Low | Pin versions; thin wrappers; own CalDAV writes. |
 | R12 | Invites from non-Google organizers remain broken (unchanged from today). | Certain | Medium (expectation) | State clearly in README; out of scope. |
 

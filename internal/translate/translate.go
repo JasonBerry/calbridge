@@ -160,7 +160,7 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 	switch o.Privacy {
 	case PrivacyFull, PrivacyHonorPrivate, PrivacyBusyOnly:
 	case "":
-		o.Privacy = PrivacyHonorPrivate
+		o.Privacy = PrivacyFull // user decision 2026-11-19
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownPrivacyMode, o.Privacy)
 	}

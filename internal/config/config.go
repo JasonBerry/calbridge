@@ -111,7 +111,7 @@ func Default() Config {
 			Interval:               Duration(2 * time.Minute),
 			Lookback:               Duration(720 * time.Hour),
 			Declined:               "keep",
-			Privacy:                "honor_private",
+			Privacy:                "full",
 			Attendees:              "all",
 			PushGoogleRSVPToICloud: true,
 		},

@@ -61,6 +61,7 @@ send_updates: all             # P0-2/P0-5
 emit_vtimezone: false         # P0-8 (iCloud inserts its own VTIMEZONE)
 x_prop_preserved: true        # P0-4/P0-5 (also survives Apple RSVP edits)
 attendees: all                # P0-4 E (user wants guests' RSVPs visible; no emails sent)
+privacy: full                 # user decision 2026-11-19 (no privacy needed from the calendar sharee)
 ```
 
 ## Notes
