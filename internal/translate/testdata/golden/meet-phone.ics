@@ -1,0 +1,29 @@
+BEGIN:VCALENDAR
+CALSCALE:GREGORIAN
+PRODID:-//calbridge//calbridge//EN
+VERSION:2.0
+BEGIN:VEVENT
+ATTENDEE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSVP=TRUE;SCHEDULE-AGEN
+ T=NONE:mailto:user@YOUR_DOMAIN
+CLASS:PUBLIC
+CREATED:20261118T044328Z
+DESCRIPTION:Join Google Meet: https://meet.google.com/aaa-bbbb-ccc\nDial-in
+ : +61 2 0000 0000 PIN: 123456789#\nMore phone numbers: https://tel.meet/aa
+ a-bbbb-ccc?pin=1234567890\n—\n\nAgenda below.\n\n— mirrored from Googl
+ e Calendar by calbridge
+DTEND;TZID=Australia/Sydney:20261120T100000
+DTSTAMP:20261119T010203Z
+DTSTART;TZID=Australia/Sydney:20261120T090000
+LAST-MODIFIED:20261118T044335Z
+ORGANIZER;SCHEDULE-AGENT=NONE:mailto:ORGANIZER_TEST@example.com
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Testing
+TRANSP:OPAQUE
+UID:evt02aaaabbbbccccdddd@google.com
+URL:https://meet.google.com/aaa-bbbb-ccc
+X-CALBRIDGE-GCAL:primary
+X-CALBRIDGE-GID:evt02aaaabbbbccccdddd
+X-CALBRIDGE-VERSION:1
+END:VEVENT
+END:VCALENDAR

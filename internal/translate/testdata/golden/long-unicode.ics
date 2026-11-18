@@ -1,0 +1,49 @@
+BEGIN:VCALENDAR
+CALSCALE:GREGORIAN
+PRODID:-//calbridge//calbridge//EN
+VERSION:2.0
+BEGIN:VEVENT
+ATTENDEE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSVP=TRUE;SCHEDULE-AGEN
+ T=NONE:mailto:user@YOUR_DOMAIN
+CLASS:PUBLIC
+CREATED:20261118T044328Z
+DESCRIPTION:Long line with emoji 😀 and CJK 漢字かなカナ. Long line
+  with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and
+  CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカ
+ ナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with 
+ emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 
+ 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. 
+ Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji
+  😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字
+ かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long l
+ ine with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 
+ and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かな
+ カナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line wi
+ th emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJ
+ K 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ
+ . Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emo
+ ji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢
+ 字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Lon
+ g line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 
+ 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字
+ かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long l
+ ine with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 
+ and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かな
+ カナ.\n\n— mirrored from Google Calendar by calbridge
+DTEND;TZID=Australia/Sydney:20261120T100000
+DTSTAMP:20261119T010203Z
+DTSTART;TZID=Australia/Sydney:20261120T090000
+LAST-MODIFIED:20261118T044335Z
+ORGANIZER;SCHEDULE-AGENT=NONE:mailto:ORGANIZER_TEST@example.com
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:会議 🎉 Planning — Ünïcödé 会議 🎉 Planning — Ünï
+ cödé 会議 🎉 Planning — Ünïcödé 会議 🎉 Planning — Ünï
+ cödé
+TRANSP:OPAQUE
+UID:evt14aaaabbbbccccdddd@google.com
+X-CALBRIDGE-GCAL:primary
+X-CALBRIDGE-GID:evt14aaaabbbbccccdddd
+X-CALBRIDGE-VERSION:1
+END:VEVENT
+END:VCALENDAR

@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/emersion/go-ical"
+
+	"github.com/JasonBerry/calbridge/internal/translate"
 )
 
 func xmlHeader(depth string) http.Header {
@@ -197,11 +199,11 @@ func objectsFrom(ms *multistatus) []Object {
 
 // Put encodes cal and PUTs it.
 func (c *Client) Put(ctx context.Context, href string, cal *ical.Calendar, cond PutCond) (string, error) {
-	var buf bytes.Buffer
-	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
+	body, err := translate.Encode(cal) // folds long lines (go-ical does not)
+	if err != nil {
 		return "", fmt.Errorf("caldav: encode: %w", err)
 	}
-	return c.PutRaw(ctx, href, buf.Bytes(), cond)
+	return c.PutRaw(ctx, href, body, cond)
 }
 
 // PutRaw PUTs a serialized VCALENDAR. It returns the ETag header, which may

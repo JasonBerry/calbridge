@@ -1,0 +1,43 @@
+{
+  "kind": "calendar#event",
+  "id": "evt10aaaabbbbccccdddd",
+  "iCalUID": "evt10aaaabbbbccccdddd@google.com",
+  "etag": "\"3589954031912094\"",
+  "status": "confirmed",
+  "eventType": "default",
+  "created": "2026-11-18T04:43:28.000Z",
+  "updated": "2026-11-18T04:43:35.956Z",
+  "summary": "Quarterly review",
+  "sequence": 0,
+  "organizer": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "creator": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "attendees": [
+    {
+      "email": "ORGANIZER_TEST@example.com",
+      "organizer": true,
+      "responseStatus": "accepted"
+    },
+    {
+      "email": "user@YOUR_DOMAIN",
+      "self": true,
+      "responseStatus": "needsAction"
+    }
+  ],
+  "start": {
+    "dateTime": "2026-11-20T09:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "end": {
+    "dateTime": "2026-11-20T10:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "reminders": {
+    "useDefault": true
+  },
+  "description": "<p>Hi all,</p><p>Please read <a href=\"https://example.com/doc?a=1&amp;b=2\">the doc</a> before.<br>Bring:<ul><li>laptop</li><li>notes &amp; ideas</li></ul></p><div>Contact: <a href=\"mailto:ORGANIZER_TEST@example.com\">ORGANIZER_TEST@example.com</a>&nbsp;</div><b>Room</b> 4&#8211;12",
+  "location": "Level 4, Room 12; Building \"A\""
+}

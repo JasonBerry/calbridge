@@ -1,0 +1,58 @@
+{
+  "kind": "calendar#event",
+  "id": "evt01aaaabbbbccccdddd",
+  "iCalUID": "evt01aaaabbbbccccdddd@google.com",
+  "etag": "\"3589954031912094\"",
+  "status": "confirmed",
+  "eventType": "default",
+  "created": "2026-11-18T04:43:28.000Z",
+  "updated": "2026-11-18T04:43:35.956Z",
+  "summary": "Testing",
+  "sequence": 0,
+  "organizer": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "creator": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "attendees": [
+    {
+      "email": "ORGANIZER_TEST@example.com",
+      "organizer": true,
+      "responseStatus": "accepted"
+    },
+    {
+      "email": "user@YOUR_DOMAIN",
+      "self": true,
+      "responseStatus": "needsAction"
+    }
+  ],
+  "start": {
+    "dateTime": "2026-11-20T09:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "end": {
+    "dateTime": "2026-11-20T10:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "reminders": {
+    "useDefault": true
+  },
+  "hangoutLink": "https://meet.google.com/aaa-bbbb-ccc",
+  "conferenceData": {
+    "conferenceId": "aaa-bbbb-ccc",
+    "conferenceSolution": {
+      "key": {
+        "type": "hangoutsMeet"
+      },
+      "name": "Google Meet"
+    },
+    "entryPoints": [
+      {
+        "entryPointType": "video",
+        "label": "meet.google.com/aaa-bbbb-ccc",
+        "uri": "https://meet.google.com/aaa-bbbb-ccc"
+      }
+    ]
+  }
+}

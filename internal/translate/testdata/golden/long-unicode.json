@@ -1,0 +1,42 @@
+{
+  "kind": "calendar#event",
+  "id": "evt14aaaabbbbccccdddd",
+  "iCalUID": "evt14aaaabbbbccccdddd@google.com",
+  "etag": "\"3589954031912094\"",
+  "status": "confirmed",
+  "eventType": "default",
+  "created": "2026-11-18T04:43:28.000Z",
+  "updated": "2026-11-18T04:43:35.956Z",
+  "summary": "会議 🎉 Planning — Ünïcödé 会議 🎉 Planning — Ünïcödé 会議 🎉 Planning — Ünïcödé 会議 🎉 Planning — Ünïcödé ",
+  "sequence": 0,
+  "organizer": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "creator": {
+    "email": "ORGANIZER_TEST@example.com"
+  },
+  "attendees": [
+    {
+      "email": "ORGANIZER_TEST@example.com",
+      "organizer": true,
+      "responseStatus": "accepted"
+    },
+    {
+      "email": "user@YOUR_DOMAIN",
+      "self": true,
+      "responseStatus": "needsAction"
+    }
+  ],
+  "start": {
+    "dateTime": "2026-11-20T09:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "end": {
+    "dateTime": "2026-11-20T10:00:00+11:00",
+    "timeZone": "Australia/Sydney"
+  },
+  "reminders": {
+    "useDefault": true
+  },
+  "description": "Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ. Long line with emoji 😀 and CJK 漢字かなカナ."
+}
