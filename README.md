@@ -23,3 +23,13 @@ make bin     # static binary in bin/calbridge
 
 Only invitations from Google Calendar organizers are handled; invitations from Outlook, Apple,
 Fastmail and others never reach the hidden Google account and are out of scope.
+
+## Responding to and deleting mirrored invitations
+
+- To accept, decline or answer "maybe", use the RSVP buttons in Apple Calendar. calbridge sends
+  your answer to the organizer through Google. A declined invitation is hidden in Apple Calendar
+  unless "Show Declined Events" is on.
+- **Deleting a mirrored invitation does not notify the organizer**, even though Apple Calendar
+  labels the button "Delete and Notify". Apple sends nothing, and calbridge does not treat a
+  deletion as a decline: it just stops mirroring that event and never recreates it. To turn an
+  invitation down, use **Decline** instead.

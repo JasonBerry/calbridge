@@ -140,7 +140,7 @@ Do these in order. Nothing here should be automated.
    3. OAuth consent screen (Google Auth Platform): User type **External**; app name `calbridge`; support email; add scope `https://www.googleapis.com/auth/calendar.events`; add `user@YOUR_DOMAIN` as a test user (harmless).
    4. **Publish the app ("In production")**. Do not leave it in Testing: Google documents "the 7-day refresh token expiration limit for apps in the Testing status" (VERIFIED). The app will be *unverified*; Google calls publishing unverified apps "strongly discouraged" and applies a hard cap of 100 users plus an "unverified app" warning screen (VERIFIED). For a single personal user this is acceptable: on consent, click *Advanced → Go to calbridge (unsafe)*.
    5. Credentials → Create OAuth client ID → Application type **Desktop app**. Download the JSON as `google-client.json`. (Desktop clients still support the loopback redirect flow — VERIFIED.)
-5. Create the throwaway organizer account `ORGANIZER_TEST@example.com` (or use any existing personal Gmail other than the hidden account) for sending test invites.
+5. Use the personal Gmail `ORGANIZER_TEST@example.com` (not the hidden account) as the organizer for sending test invites.
 
 **Apple side**
 
