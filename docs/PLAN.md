@@ -488,7 +488,7 @@ type RenderOptions struct {
     SelfEmail       string        // user@YOUR_DOMAIN (attendee address used in iCloud)
     ScheduleAgent   string        // "", "CLIENT", "NONE"  (from Phase 0)
     Privacy         PrivacyMode   // Full | HonorPrivate | BusyOnly
-    IncludeGuests   bool          // list other guests' names in DESCRIPTION
+    Attendees       AttendeeMode  // all (default) | self
     DefaultAlarms   []time.Duration
     EmitVTimezone   bool
     Now             time.Time     // DTSTAMP
@@ -502,7 +502,7 @@ func ExtractSelfStatus(cal *ical.Calendar, selfEmail string) (master PartStat, o
 
 func GoogleToPartStat(s string) PartStat   // accepted->ACCEPTED, tentative->TENTATIVE, declined->DECLINED, needsAction->NEEDS-ACTION
 func PartStatToGoogle(p PartStat) (string, bool) // NEEDS-ACTION, DELEGATED, etc. -> ("", false): never propagated
-func ContentHash(cal *ical.Calendar) string // excludes DTSTAMP, PARTSTAT, VALARM, X-APPLE-*
+func ContentHash(cal *ical.Calendar, selfEmail string) string // excludes DTSTAMP, LAST-MODIFIED, self PARTSTAT, VALARM, X-APPLE-*
 ```
 
 ### 7.1 UID and href strategy (DECISION)
@@ -565,7 +565,7 @@ More phone numbers: https://tel.meet/...
 
 From `conferenceData.entryPoints` (video, phone, more) in that order; fall back to `hangoutLink`. Also set `URL`. (Apple showing a "Join" button for Meet URLs: UNVERIFIED, cosmetic.)
 
-### 7.6 ORGANIZER / ATTENDEE (DECISION: self-only attendee)
+### 7.6 ORGANIZER / ATTENDEE (DECISION: all attendees since P0-4 E; originally self-only)
 
 Only the organizer and the user appear. Justification:
 
@@ -573,7 +573,7 @@ Only the organizer and the user appear. Justification:
 2. Scheduling side effects: an object listing third-party attendees may make Apple Calendar treat the user as able to message/invite them, or (worst case) cause iCloud to send iTIP messages to them. Self-only minimises the surface (P0-4 variant E checks this).
 3. RSVP extraction is simpler and unambiguous.
 
-Optional `include_guest_list: true` adds a `Guests: Alice, Bob (+3)` line to DESCRIPTION when `guestsCanSeeOtherGuests != false`. Default off.
+**Superseded 2026-11-19 (P0-4 E, user decision):** mirrors list **every** attendee Google returns (organizer, self, other guests and resources) with their own `responseStatus` as PARTSTAT and `SCHEDULE-AGENT` on every line, so guests' RSVPs show natively in Apple Calendar. P0-4 E showed iCloud sends nothing to guests (on PUT or on the user's RSVP) and Apple preserves guest lines when the user responds. The user does not need privacy from the calendar sharee. `sync.attendees: self` restores the self-only rendering above. Redacted (Busy) mirrors still list only organizer and self. The `include_guest_list` description line is removed.
 
 Optional attendees (`attendees[self].optional = true`) → `ROLE=OPT-PARTICIPANT`.
 
@@ -832,7 +832,7 @@ sync:
   include_organized_by_me: false
   declined: keep                # keep | delete   (P0-6)
   privacy: honor_private        # full | honor_private | busy_only
-  include_guest_list: false
+  attendees: all                # all | self (P0-4 E)
   alarms: []                    # e.g. [10m] applied on create only
   push_google_rsvp_to_icloud: true
   recreate_on_reschedule: false
@@ -1066,7 +1066,7 @@ Backup: daily `VACUUM INTO '/var/lib/calbridge/backups/calbridge-YYYYMMDD.db'` f
 
 - Least privilege: Google scope `calendar.events` (or `calendar.events.owned` if P0-2 proves sufficient); never the full `calendar` scope. iCloud app-specific password is inherently full-account for CalDAV/CardDAV (cannot be scoped) — protect it accordingly, dedicated password named `calbridge` so it can be revoked alone.
 - Data at rest: SQLite contains raw Google event JSON (titles, descriptions, attendee emails of third parties). File 0600, service user only, disk encryption recommended on VPS. Prune cache rows 90 days after event end.
-- Sharee-visible data: mirrors land in a calendar shared with another person, so they see whatever the mirror contains: titles, descriptions (including Meet links and dial-in PINs), organizer name/email. Defaults: `privacy: honor_private`, `include_guest_list: false`, self-only ATTENDEE. Offer `busy_only` for full redaction. Note: RSVP controls are only on the user's devices, but whether the sharee could also RSVP on a shared calendar (and thereby respond on the user's behalf) is UNVERIFIED — check during P0-6/E2E.
+- Sharee-visible data: mirrors land in a calendar shared with another person, so they see whatever the mirror contains: titles, descriptions (including Meet links and dial-in PINs), organizer name/email. Defaults: `privacy: honor_private`, all attendees (P0-4 E; the user does not need privacy from the sharee). Offer `busy_only` for full redaction. Note: RSVP controls are only on the user's devices, but whether the sharee could also RSVP on a shared calendar (and thereby respond on the user's behalf) is UNVERIFIED — check during P0-6/E2E.
 - Threat model (short):
   1. Stolen host → attacker gets Google calendar.events token (read/modify the user's Google calendar) and iCloud app password (read/write all the user's iCloud calendars & contacts). Mitigation: dedicated user, 0600, systemd hardening, revoke both on compromise (documented in README).
   2. Malicious invite content (huge description, weird RRULE, injection in ICS text) → strict escaping via go-ical encoder, length caps (description ≤ 32 KB, attendees ignored), RRULE parse errors → mirror as single event + warning.

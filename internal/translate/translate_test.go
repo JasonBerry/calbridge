@@ -92,9 +92,9 @@ var goldenCases = []goldenCase{
 	{name: "group-organizer"},
 	{name: "no-title"},
 	{name: "long-unicode"},
-	{name: "guests", opts: func(o *RenderOptions) { o.IncludeGuests = true }},
-	{name: "guests-off", input: "guests"},
-	{name: "guests-hidden", opts: func(o *RenderOptions) { o.IncludeGuests = true }},
+	{name: "guests"},
+	{name: "guests-self-only", input: "guests", opts: func(o *RenderOptions) { o.Attendees = AttendeesSelf }},
+	{name: "guests-busy-only", input: "guests", opts: func(o *RenderOptions) { o.Privacy = PrivacyBusyOnly }},
 	{name: "no-schedule-agent", input: "meet-invite", opts: func(o *RenderOptions) { o.ScheduleAgent = "" }},
 	{name: "alarm-on-create", input: "meet-invite", opts: func(o *RenderOptions) {
 		o.DefaultAlarms = []time.Duration{10 * time.Minute, 24 * time.Hour}
@@ -180,7 +180,7 @@ func TestRoundTripExtract(t *testing.T) {
 					t.Errorf("%s changed in round trip:\nwant %q\ngot  %q", prop, w, g)
 				}
 			}
-			if ContentHash(cal) != ContentHash(back) {
+			if ContentHash(cal, selfEmail) != ContentHash(back, selfEmail) {
 				t.Error("ContentHash differs after encode/decode")
 			}
 		})
@@ -282,7 +282,7 @@ func TestContentHash(t *testing.T) {
 		}
 		return cal
 	}
-	base := ContentHash(render(ev, RSVPView{}, nil, nil))
+	base := ContentHash(render(ev, RSVPView{}, nil, nil), selfEmail)
 	prev := loadICS(t, filepath.Join("testdata", "prev", "apple-rsvp.ics"))
 
 	same := map[string]*ical.Calendar{
@@ -295,7 +295,7 @@ func TestContentHash(t *testing.T) {
 	evUpd.Updated = "2026-11-19T00:00:00.000Z" // another guest responded
 	same["Google updated moved"] = render(&evUpd, RSVPView{}, nil, nil)
 	for name, cal := range same {
-		if h := ContentHash(cal); h != base {
+		if h := ContentHash(cal, selfEmail); h != base {
 			t.Errorf("%s changed the hash", name)
 		}
 	}
@@ -307,6 +307,15 @@ func TestContentHash(t *testing.T) {
 		},
 		"sequence": func(e *calendar.Event) { e.Sequence = 1 },
 		"location": func(e *calendar.Event) { e.Location = "Room 1" },
+		"organizer's response": func(e *calendar.Event) {
+			a := *e.Attendees[0]
+			a.ResponseStatus = "tentative"
+			e.Attendees = []*calendar.EventAttendee{&a, e.Attendees[1]}
+		},
+		"guest added": func(e *calendar.Event) {
+			e.Attendees = append(append([]*calendar.EventAttendee(nil), e.Attendees...),
+				&calendar.EventAttendee{Email: "guest@example.com", ResponseStatus: "needsAction"})
+		},
 		"optional": func(e *calendar.Event) {
 			a := *e.Attendees[1]
 			a.Optional = true
@@ -316,7 +325,7 @@ func TestContentHash(t *testing.T) {
 	for name, mod := range differ {
 		e := *ev
 		mod(&e)
-		if ContentHash(render(&e, RSVPView{}, nil, nil)) == base {
+		if ContentHash(render(&e, RSVPView{}, nil, nil), selfEmail) == base {
 			t.Errorf("changing %s did not change the hash", name)
 		}
 	}
@@ -354,6 +363,7 @@ func TestRenderErrors(t *testing.T) {
 		}, ErrInvalidEvent},
 		{"no self email", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.SelfEmail = ""; return nil }, ErrInvalidEvent},
 		{"privacy", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.Privacy = "public"; return nil }, ErrUnknownPrivacyMode},
+		{"attendee mode", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.Attendees = "some"; return nil }, ErrUnknownAttendeeMode},
 		{"vtimezone", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.EmitVTimezone = true; return nil }, ErrVTimezoneNotYet},
 	}
 	for _, tc := range tests {
@@ -489,5 +499,34 @@ func TestTriggerValue(t *testing.T) {
 		if got := triggerValue(d); got != want {
 			t.Errorf("triggerValue(%v) = %s; want %s", d, got, want)
 		}
+	}
+}
+
+// TestGuestResponsesExtractOnlySelf: with every attendee listed, extraction
+// still reads only the user's PARTSTAT, and a self-only hash input ignores
+// self but not guests (P0-4 E).
+func TestGuestResponsesExtractOnlySelf(t *testing.T) {
+	ev := loadEvent(t, "guests")
+	cal, err := RenderSeries(ev, nil, RSVPView{}, nil, baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cal.Children[0].Props.Values(ical.PropAttendee)); n != len(ev.Attendees) {
+		t.Fatalf("rendered %d attendees; Google has %d", n, len(ev.Attendees))
+	}
+	ps, _, err := ExtractSelfStatus(cal, selfEmail)
+	if err != nil || ps != PartStatNeedsAction {
+		t.Fatalf("self = %s, %v", ps, err)
+	}
+	// Apple's rewrite after the user accepts (P0-4 E): guests kept as-is.
+	apple, err := RenderSeries(ev, nil, RSVPView{Master: PartStatAccepted}, nil, baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ContentHash(apple, selfEmail) != ContentHash(cal, selfEmail) {
+		t.Error("self PARTSTAT change altered the hash")
+	}
+	if ContentHash(apple, "") == ContentHash(cal, "") {
+		t.Error("without a self address every PARTSTAT should count")
 	}
 }

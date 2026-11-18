@@ -57,7 +57,7 @@ type objectSpec struct {
 	ScheduleAgent string // "", CLIENT, NONE
 	Attendee      string
 	PartStat      string // default NEEDS-ACTION
-	ExtraGuests   []string
+	ExtraGuests   []guest
 	Optional      bool
 	TZ            string // IANA zone for timed events; "" = UTC
 	VTimezone     bool
@@ -68,6 +68,10 @@ type objectSpec struct {
 	Overrides     []override
 	GoogleID      string
 	Now           time.Time
+}
+
+type guest struct {
+	Email, CN, PartStat string
 }
 
 type override struct {
@@ -184,7 +188,11 @@ func (s objectSpec) writeEvent(w func(string), ov *override) {
 		}
 		w(att + ":mailto:" + s.Attendee)
 		for _, g := range s.ExtraGuests {
-			w("ATTENDEE;CN=Guest;PARTSTAT=ACCEPTED;ROLE=REQ-PARTICIPANT:mailto:" + g)
+			line := "ATTENDEE;CN=" + quoteParam(g.CN) + ";PARTSTAT=" + g.PartStat + ";ROLE=REQ-PARTICIPANT"
+			if s.ScheduleAgent != "" {
+				line += ";SCHEDULE-AGENT=" + s.ScheduleAgent
+			}
+			w(line + ":mailto:" + g.Email)
 		}
 	}
 	gid := s.GoogleID

@@ -10,19 +10,14 @@ import (
 )
 
 // description assembles DESCRIPTION: conference block, Google description
-// (HTML converted to text), optional guest line, footer (§7.2, §7.5, §7.6).
-func description(ev *calendar.Event, o RenderOptions) string {
+// (HTML converted to text), footer (§7.2, §7.5).
+func description(ev *calendar.Event) string {
 	var parts []string
 	if b := conferenceBlock(ev); b != "" {
 		parts = append(parts, b)
 	}
 	if d := strings.TrimSpace(HTMLToText(ev.Description)); d != "" {
 		parts = append(parts, d)
-	}
-	if o.IncludeGuests {
-		if g := guestLine(ev); g != "" {
-			parts = append(parts, g)
-		}
 	}
 	parts = append(parts, Footer)
 	return strings.Join(parts, "\n\n")
@@ -83,36 +78,6 @@ func conferenceBlock(ev *calendar.Event) string {
 		return ""
 	}
 	return strings.Join(lines, "\n") + "\n—"
-}
-
-const maxGuestNames = 5
-
-// guestLine lists other guests unless Google hides the guest list.
-func guestLine(ev *calendar.Event) string {
-	if ev.GuestsCanSeeOtherGuests != nil && !*ev.GuestsCanSeeOtherGuests {
-		return ""
-	}
-	var names []string
-	for _, a := range ev.Attendees {
-		if a == nil || a.Self || a.Organizer || a.Resource {
-			continue
-		}
-		n := strings.TrimSpace(a.DisplayName)
-		if n == "" {
-			n = a.Email
-		}
-		if n != "" {
-			names = append(names, n)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	line := "Guests: " + strings.Join(names[:min(len(names), maxGuestNames)], ", ")
-	if len(names) > maxGuestNames {
-		line += fmt.Sprintf(" (+%d)", len(names)-maxGuestNames)
-	}
-	return line
 }
 
 var (

@@ -20,22 +20,24 @@ var volatileProps = map[string]bool{
 }
 
 // ContentHash is a sha256 over the calendar's content minus DTSTAMP,
-// LAST-MODIFIED, PARTSTAT, VALARMs and the properties carried over from the
-// iCloud object (X-APPLE-*, X-MOZ-*, X-WR-*). Two renders of the same Google
-// state hash equal regardless of what Apple added to the stored object.
+// LAST-MODIFIED, selfEmail's PARTSTAT (tracked separately by the RSVP state
+// machine, §8.2), VALARMs and the properties carried over from the iCloud
+// object (X-APPLE-*, X-MOZ-*, X-WR-*). Other guests' PARTSTAT is included,
+// so their responses update the mirror. Two renders of the same Google state
+// hash equal regardless of what Apple added to the stored object.
 // Compute it on calbridge's own rendering only, never on an object read back
 // from iCloud (P0-5: Apple rewrites parameters, TRANSP and PRODID).
-func ContentHash(cal *ical.Calendar) string {
+func ContentHash(cal *ical.Calendar, selfEmail string) string {
 	h := sha256.New()
 	if cal != nil {
-		hashComponent(h, cal.Component)
+		hashComponent(h, cal.Component, strings.ToLower(strings.TrimSpace(selfEmail)))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 type writer interface{ Write([]byte) (int, error) }
 
-func hashComponent(w writer, c *ical.Component) {
+func hashComponent(w writer, c *ical.Component, self string) {
 	_, _ = w.Write([]byte("BEGIN:" + c.Name + "\n"))
 	names := make([]string, 0, len(c.Props))
 	for n := range c.Props {
@@ -48,7 +50,7 @@ func hashComponent(w writer, c *ical.Component) {
 	for _, n := range names {
 		lines := make([]string, 0, len(c.Props[n]))
 		for _, p := range c.Props[n] {
-			lines = append(lines, canonicalProp(p))
+			lines = append(lines, canonicalProp(p, self))
 		}
 		sort.Strings(lines)
 		for _, l := range lines {
@@ -59,17 +61,19 @@ func hashComponent(w writer, c *ical.Component) {
 		if child.Name == ical.CompAlarm {
 			continue
 		}
-		hashComponent(w, child)
+		hashComponent(w, child, self)
 	}
 	_, _ = w.Write([]byte("END:" + c.Name + "\n"))
 }
 
-func canonicalProp(p ical.Prop) string {
+func canonicalProp(p ical.Prop, self string) string {
 	var b strings.Builder
 	b.WriteString(p.Name)
+	isSelf := p.Name == ical.PropAttendee && self != "" &&
+		(attendeeAddress(p.Value) == self || strings.ToLower(p.Params.Get("EMAIL")) == self)
 	keys := make([]string, 0, len(p.Params))
 	for k := range p.Params {
-		if p.Name == ical.PropAttendee && k == ical.ParamParticipationStatus {
+		if isSelf && k == ical.ParamParticipationStatus {
 			continue
 		}
 		keys = append(keys, k)

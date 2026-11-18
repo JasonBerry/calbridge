@@ -56,7 +56,7 @@ type Sync struct {
 	IncludeOrganizedByMe   bool       `yaml:"include_organized_by_me"`
 	Declined               string     `yaml:"declined"`
 	Privacy                string     `yaml:"privacy"`
-	IncludeGuestList       bool       `yaml:"include_guest_list"`
+	Attendees              string     `yaml:"attendees"` // all | self (P0-4 E)
 	Alarms                 []Duration `yaml:"alarms"`
 	PushGoogleRSVPToICloud bool       `yaml:"push_google_rsvp_to_icloud"`
 	RecreateOnReschedule   bool       `yaml:"recreate_on_reschedule"`
@@ -112,6 +112,7 @@ func Default() Config {
 			Lookback:               Duration(720 * time.Hour),
 			Declined:               "keep",
 			Privacy:                "honor_private",
+			Attendees:              "all",
 			PushGoogleRSVPToICloud: true,
 		},
 		Store: Store{
@@ -340,6 +341,7 @@ func (c Config) Validate() error {
 	}
 	oneOf("sync.declined", c.Sync.Declined, "keep", "delete")
 	oneOf("sync.privacy", c.Sync.Privacy, "full", "honor_private", "busy_only")
+	oneOf("sync.attendees", c.Sync.Attendees, "all", "self")
 	for _, a := range c.Sync.Alarms {
 		if a.D() <= 0 {
 			bad("sync.alarms entries must be positive durations")

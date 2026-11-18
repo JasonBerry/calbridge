@@ -181,6 +181,7 @@ func caldavPut(ctx context.Context, e *env, args []string) error {
 	startFlag := fs.String("start", "", "local start 2006-01-02T15:04 (default: 2 days from now at 10:00)")
 	uid := fs.String("uid", "", "fixed UID (default: random per run)")
 	seq := fs.Int64("sequence", -1, "override SEQUENCE")
+	guests := fs.String("guests", "", "variant E: comma-separated guest addresses (use addresses you can read, e.g. plus-addresses)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -281,7 +282,7 @@ func caldavPut(ctx context.Context, e *env, args []string) error {
 				spec.ScheduleAgent = *agent
 			case "E":
 				spec.ScheduleAgent = *agent
-				spec.ExtraGuests = []string{"guest1@calbridge.invalid", "guest2@calbridge.invalid"}
+				spec.ExtraGuests = variantEGuests(*guests)
 			default:
 				return fmt.Errorf("unknown --variant %q", *variant)
 			}
@@ -294,7 +295,7 @@ func caldavPut(ctx context.Context, e *env, args []string) error {
 		}
 		spec.UID = *uid
 		if spec.UID == "" {
-			spec.UID = fmt.Sprintf("p0-%s-%s@calbridge.invalid", strings.ToLower(strings.ReplaceAll(label, " ", "-")), randomID())
+			spec.UID = fmt.Sprintf("%s-%s@calbridge.invalid", strings.ToLower(strings.ReplaceAll(label, " ", "-")), randomID())
 		}
 		spec.Summary = label
 		applyOverrides(&spec, *partstat, *seq)
@@ -778,4 +779,25 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// variantEGuests builds P0-4 variant E's extra attendees with a spread of
+// responses (accepted, tentative, declined, needs-action, …) so Apple's
+// display of each can be checked.
+func variantEGuests(list string) []guest {
+	var addrs []string
+	for _, a := range strings.Split(list, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			addrs = append(addrs, a)
+		}
+	}
+	if len(addrs) == 0 {
+		addrs = []string{"guest1@calbridge.invalid", "guest2@calbridge.invalid"}
+	}
+	stats := []string{"ACCEPTED", "TENTATIVE", "DECLINED", "NEEDS-ACTION"}
+	out := make([]guest, len(addrs))
+	for i, a := range addrs {
+		out[i] = guest{Email: a, CN: fmt.Sprintf("Guest %d", i+1), PartStat: stats[i%len(stats)]}
+	}
+	return out
 }

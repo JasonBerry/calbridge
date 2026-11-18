@@ -91,12 +91,26 @@ const (
 	PrivacyBusyOnly     PrivacyMode = "busy_only"
 )
 
+// AttendeeMode selects which attendees a mirror lists (§7.6).
+type AttendeeMode string
+
+const (
+	// AttendeesAll lists every attendee Google returns, each with their own
+	// response, so other guests' RSVPs show in Apple Calendar (P0-4 E).
+	AttendeesAll AttendeeMode = "all"
+	// AttendeesSelf lists only the user (the original §7.6 rule).
+	AttendeesSelf AttendeeMode = "self"
+)
+
+// ErrUnknownAttendeeMode is returned for an unrecognised RenderOptions.Attendees.
+var ErrUnknownAttendeeMode = errors.New("translate: unknown attendee mode")
+
 // RenderOptions configure RenderSeries.
 type RenderOptions struct {
 	SelfEmail        string // attendee address written to iCloud
 	ScheduleAgent    string // "", "CLIENT", "NONE" (Phase 0 P0-4: NONE)
 	Privacy          PrivacyMode
-	IncludeGuests    bool            // "Guests: …" line in DESCRIPTION
+	Attendees        AttendeeMode    // all (default) | self
 	DefaultAlarms    []time.Duration // added only when prev == nil (create)
 	EmitVTimezone    bool            // Phase 0 P0-8: false
 	Now              time.Time       // DTSTAMP
@@ -149,6 +163,13 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 		o.Privacy = PrivacyHonorPrivate
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownPrivacyMode, o.Privacy)
+	}
+	switch o.Attendees {
+	case AttendeesAll, AttendeesSelf:
+	case "":
+		o.Attendees = AttendeesAll
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnknownAttendeeMode, o.Attendees)
 	}
 	if o.SelfEmail == "" {
 		return nil, fmt.Errorf("%w: RenderOptions.SelfEmail is empty", ErrInvalidEvent)
@@ -228,7 +249,7 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 		if u := videoURL(master); u != "" {
 			setRaw(p, ical.PropURL, u)
 		}
-		setText(p, ical.PropDescription, description(master, o))
+		setText(p, ical.PropDescription, description(master))
 	}
 
 	p.Set(organizerProp(master.Organizer, o.ScheduleAgent))
@@ -236,7 +257,17 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 	if partstat == "" {
 		partstat = GoogleToPartStat(self.ResponseStatus)
 	}
-	p.Set(attendeeProp(self, o.SelfEmail, partstat, o.ScheduleAgent))
+	// Redacted mirrors never list other guests.
+	others := o.Attendees == AttendeesAll && !redact
+	for _, a := range master.Attendees {
+		switch {
+		case a == nil:
+		case a == self:
+			p.Add(attendeeProp(a, o.SelfEmail, partstat, o.ScheduleAgent, true))
+		case others && a.Email != "" && !strings.EqualFold(a.Email, o.SelfEmail):
+			p.Add(attendeeProp(a, a.Email, GoogleToPartStat(a.ResponseStatus), o.ScheduleAgent, false))
+		}
+	}
 
 	setRaw(p, PropGoogleID, master.Id)
 	setRaw(p, PropGoogleCalendar, o.GoogleCalendarID)
@@ -270,19 +301,27 @@ func organizerProp(org *calendar.EventOrganizer, agent string) *ical.Prop {
 	return pr
 }
 
-// attendeeProp renders the self attendee. CN is only written when Google
-// supplies a display name: Apple shows a CN verbatim (P0-7 showed a
-// placeholder "User"), and without one it falls back to the address book.
-func attendeeProp(self *calendar.EventAttendee, email string, ps PartStat, agent string) *ical.Prop {
+// attendeeProp renders one attendee. CN is only written when Google supplies
+// a display name: Apple shows a CN verbatim (P0-7 showed a placeholder
+// "User"), and without one it falls back to the address book. RSVP=TRUE is
+// set on self only (the one whose reply is expected from this calendar);
+// resources render as CUTYPE=RESOURCE. Every line carries SCHEDULE-AGENT so
+// iCloud never mails other guests (P0-4 E).
+func attendeeProp(a *calendar.EventAttendee, email string, ps PartStat, agent string, self bool) *ical.Prop {
 	pr := ical.NewProp(ical.PropAttendee)
 	pr.Value = "mailto:" + email
-	if name := paramSafe(self.DisplayName); name != "" {
+	if name := paramSafe(a.DisplayName); name != "" {
 		pr.Params.Set(ical.ParamCommonName, name)
 	}
 	pr.Params.Set(ical.ParamParticipationStatus, string(ps))
-	pr.Params.Set(ical.ParamRSVP, "TRUE")
+	if self {
+		pr.Params.Set(ical.ParamRSVP, "TRUE")
+	}
+	if a.Resource {
+		pr.Params.Set(ical.ParamCalendarUserType, "RESOURCE")
+	}
 	role := "REQ-PARTICIPANT"
-	if self.Optional {
+	if a.Optional {
 		role = "OPT-PARTICIPANT"
 	}
 	pr.Params.Set(ical.ParamRole, role)

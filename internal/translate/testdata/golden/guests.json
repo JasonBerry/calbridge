@@ -34,17 +34,18 @@
     {
       "email": "guest2@example.com",
       "displayName": "",
-      "responseStatus": "accepted"
+      "responseStatus": "tentative",
+      "optional": true
     },
     {
       "email": "guest3@example.com",
       "displayName": "Guest 3",
-      "responseStatus": "accepted"
+      "responseStatus": "declined"
     },
     {
       "email": "guest4@example.com",
       "displayName": "",
-      "responseStatus": "accepted"
+      "responseStatus": "needsAction"
     },
     {
       "email": "guest5@example.com",
@@ -54,12 +55,12 @@
     {
       "email": "guest6@example.com",
       "displayName": "",
-      "responseStatus": "accepted"
+      "responseStatus": "tentative"
     },
     {
       "email": "guest7@example.com",
       "displayName": "Guest 7",
-      "responseStatus": "accepted"
+      "responseStatus": "declined"
     },
     {
       "email": "room@resource.calendar.google.com",

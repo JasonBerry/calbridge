@@ -24,7 +24,7 @@ sync:
   include_organized_by_me: false
   declined: keep                # keep | delete   (P0-6)
   privacy: honor_private        # full | honor_private | busy_only
-  include_guest_list: false
+  attendees: all                # all (organizer, you and every guest, with responses) | self (P0-4 E)
   alarms: []                    # e.g. [10m] applied on create only
   push_google_rsvp_to_icloud: true
   recreate_on_reschedule: false
