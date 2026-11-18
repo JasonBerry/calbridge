@@ -1,0 +1,40 @@
+# calbridge example config. Copy to /etc/calbridge/config.yaml (or ./dev/config.yaml for local runs,
+# which is git-ignored) and replace the placeholders. Secrets are never stored in this file.
+google:
+  client_file: /etc/calbridge/google-client.json   # Desktop OAuth client JSON (0600)
+  token_file: /var/lib/calbridge/google-token.json  # written by `calbridge auth` (0600)
+  calendar_id: primary
+  self_email: user@YOUR_DOMAIN
+  send_updates: all            # all | externalOnly | none   (Phase 0 P0-5)
+  scope: https://www.googleapis.com/auth/calendar.events
+icloud:
+  username: APPLE_ID_EMAIL
+  app_password_file: /etc/calbridge/icloud-app-password   # 0600; or env CALBRIDGE_ICLOUD_APP_PASSWORD; or systemd credential
+  calendar: "Home"              # display name; or calendar_href for exact match
+  calendar_href: ""
+  attendee_email: user@YOUR_DOMAIN
+  schedule_agent: ""            # "" | CLIENT | NONE      (P0-4)
+  delete_mode: plain            # plain | schedule_reply_f | neutralize_then_delete (P0-9)
+  sync_method: auto             # auto | sync-collection | ctag (P0-3)
+  emit_vtimezone: true          # (P0-8)
+  rate_limit_rps: 5
+sync:
+  interval: 2m
+  lookback: 720h                # 30 days
+  include_organized_by_me: false
+  declined: keep                # keep | delete   (P0-6)
+  privacy: honor_private        # full | honor_private | busy_only
+  include_guest_list: false
+  alarms: []                    # e.g. [10m] applied on create only
+  push_google_rsvp_to_icloud: true
+  recreate_on_reschedule: false
+store:
+  path: /var/lib/calbridge/calbridge.db
+  backup_dir: /var/lib/calbridge/backups
+server:
+  listen: 127.0.0.1:8089        # /healthz, /status (no event data)
+monitoring:
+  ping_url: ""                  # e.g. healthchecks.io URL; GET on success, /fail on auth error
+log:
+  level: info
+  format: json

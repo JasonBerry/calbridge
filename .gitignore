@@ -32,3 +32,21 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# calbridge: local state and secrets — never commit
+*.db
+*.db-wal
+*.db-shm
+*.lock
+/bin/
+/calbridge
+/dev/
+secrets/
+token*.json
+google-client*.json
+client_secret*.json
+icloud-app-password*
+*.local.yaml
+config.yaml
+# raw (unredacted) spike dumps; copy redacted fixtures into docs/phase0/ by hand
+/dumps/

@@ -1,0 +1,31 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Test helpers write temp files and read fixtures by computed path.
+      - path: _test\.go
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
