@@ -1,0 +1,11 @@
+# Keep secrets, local state and captures out of the build context.
+dev/
+dumps/
+bin/
+*.db
+*.db-*
+*.db.lock
+*token*.json
+*client*.json
+*app-password*
+.git/

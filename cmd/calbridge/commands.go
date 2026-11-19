@@ -74,8 +74,22 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	a.log.InfoContext(ctx, "calbridge serving", "version", version, "calendar_href", a.cal.Href, "interval", interval.String())
 	pinger := pinger{url: a.cfg.Monitoring.PingURL, client: &http.Client{Timeout: 10 * time.Second}}
 	loop := serveLoop{engine: a.engine, store: a.store, srv: srv, ping: pinger.ping, log: a.log.InfoContext}
+	if dir := a.cfg.Store.BackupDir; dir != "" {
+		loop.backup = func(ctx context.Context, now time.Time) {
+			path, created, err := a.store.Backup(ctx, dir, now, backupKeep)
+			switch {
+			case err != nil:
+				a.log.WarnContext(ctx, "database backup failed", "err", err)
+			case created:
+				a.log.InfoContext(ctx, "database backed up", "path", path)
+			}
+		}
+	}
 	return loop.run(ctx, interval)
 }
+
+// backupKeep is how many daily backups serve keeps (§13).
+const backupKeep = 14
 
 // serveLoop runs cycles until ctx is cancelled.
 type serveLoop struct {
@@ -85,9 +99,12 @@ type serveLoop struct {
 	store *store.Store
 	srv   *server.Server
 	ping  func(ctx context.Context, fail bool, class string)
-	log   func(ctx context.Context, msg string, args ...any)
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
+	// backup, if set, snapshots the database after a successful cycle
+	// (daily: store.Backup skips a day that already has one).
+	backup func(ctx context.Context, now time.Time)
+	log    func(ctx context.Context, msg string, args ...any)
+	now    func() time.Time
+	sleep  func(ctx context.Context, d time.Duration) error
 }
 
 func (l serveLoop) run(ctx context.Context, interval time.Duration) error {
@@ -107,6 +124,9 @@ func (l serveLoop) run(ctx context.Context, interval time.Duration) error {
 		switch {
 		case err == nil:
 			l.ping(ctx, false, "")
+			if l.backup != nil {
+				l.backup(ctx, now())
+			}
 		case syncer.IsAuth(err):
 			l.ping(ctx, true, syncer.ErrorClass(err))
 			l.log(ctx, "authorization failed; fix credentials and restart", "class", syncer.ErrorClass(err))

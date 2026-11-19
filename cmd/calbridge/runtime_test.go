@@ -112,7 +112,7 @@ func TestServeLoop(t *testing.T) {
 	eng := &scriptedEngine{errs: []error{nil, errors.New("icloud 503"), fmt.Errorf("x: %w", googlecal.ErrAuth), nil}}
 	now := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
 	srv := server.New("v", "/c/", time.Minute, func() time.Time { return now })
-	var pings []string
+	var pings, backups []string
 	var slept []time.Duration
 	type snap struct {
 		success time.Time
@@ -125,6 +125,9 @@ func TestServeLoop(t *testing.T) {
 			pings = append(pings, fmt.Sprintf("%v:%s", fail, class))
 		},
 		log: func(context.Context, string, ...any) {},
+		backup: func(_ context.Context, at time.Time) {
+			backups = append(backups, at.Format("15:04"))
+		},
 		now: func() time.Time { return now },
 		sleep: func(_ context.Context, d time.Duration) error {
 			s := srv.Snapshot()
@@ -145,6 +148,9 @@ func TestServeLoop(t *testing.T) {
 	}
 	if got := strings.Join(pings, " "); got != "false: true:google_auth false:" {
 		t.Errorf("pings %q", got)
+	}
+	if len(backups) != 2 {
+		t.Errorf("backups after successful cycles only: %v", backups)
 	}
 	if snaps[1].class != "transient" || snaps[1].fails != 1 || snaps[2].class != "google_auth" || snaps[2].fails != 2 ||
 		snaps[3].class != "" || snaps[3].fails != 0 || snaps[3].success.IsZero() {
