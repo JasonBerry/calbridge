@@ -133,3 +133,7 @@ keeps 14. To restore: stop the service, copy a backup over `store.path` (and del
 without rewriting mirrors that already match. Mirrors you deleted in Apple can only be told
 apart from lost ones with the old database; after a rebuild they come back (or use `--restore`
 deliberately). Back up `/etc/calbridge` separately, encrypted: it holds the secrets.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
