@@ -102,6 +102,12 @@ var goldenCases = []goldenCase{
 	{name: "update-preserves-apple", input: "meet-invite", prev: "apple-rsvp", rsvp: RSVPView{Master: PartStatAccepted},
 		opts: func(o *RenderOptions) { o.DefaultAlarms = []time.Duration{10 * time.Minute} }},
 	{name: "min-sequence", input: "meet-invite", opts: func(o *RenderOptions) { o.MinSequence = 4 }},
+	// M6: generated VTIMEZONEs (emit_vtimezone: true) and zone-name handling.
+	{name: "vtimezone-sydney", input: "meet-invite", opts: func(o *RenderOptions) { o.EmitVTimezone = true }},
+	{name: "vtimezone-two-zones", input: "timed-two-zones", opts: func(o *RenderOptions) { o.EmitVTimezone = true }},
+	{name: "vtimezone-allday", input: "allday-single", opts: func(o *RenderOptions) { o.EmitVTimezone = true }},
+	{name: "windows-zone"},
+	{name: "unknown-zone"},
 }
 
 func renderCase(t *testing.T, tc goldenCase) (*ical.Calendar, []byte) {
@@ -364,7 +370,6 @@ func TestRenderErrors(t *testing.T) {
 		{"no self email", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.SelfEmail = ""; return nil }, ErrInvalidEvent},
 		{"privacy", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.Privacy = "public"; return nil }, ErrUnknownPrivacyMode},
 		{"attendee mode", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.Attendees = "some"; return nil }, ErrUnknownAttendeeMode},
-		{"vtimezone", func(_ *calendar.Event, o *RenderOptions) []*calendar.Event { o.EmitVTimezone = true; return nil }, ErrVTimezoneNotYet},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -528,5 +533,21 @@ func TestGuestResponsesExtractOnlySelf(t *testing.T) {
 	}
 	if ContentHash(apple, "") == ContentHash(cal, "") {
 		t.Error("without a self address every PARTSTAT should count")
+	}
+}
+
+func TestNormalizeRecurrenceIDRepeatedHour(t *testing.T) {
+	// 02:30 on 5 Apr 2026 in Sydney happens twice; the TZID form means the
+	// first (AEDT, 15:30Z the day before).
+	pr := ical.NewProp(ical.PropRecurrenceID)
+	pr.Params.Set(ical.ParamTimezoneID, "Australia/Sydney")
+	pr.Value = "20260405T023000"
+	if got := NormalizeRecurrenceID(pr); got != "20260404T153000Z" {
+		t.Errorf("NormalizeRecurrenceID = %s; want 20260404T153000Z", got)
+	}
+	pr.Params.Set(ical.ParamTimezoneID, "AUS Eastern Standard Time") // alias
+	pr.Value = "20261120T100000"
+	if got := NormalizeRecurrenceID(pr); got != "20261119T230000Z" {
+		t.Errorf("alias zone: %s", got)
 	}
 }

@@ -40,7 +40,6 @@ var (
 	ErrNoOrganizer        = errors.New("translate: event has no organizer")
 	ErrInvalidEvent       = errors.New("translate: invalid event")
 	ErrRecurringNotYet    = errors.New("translate: recurring events are rendered from M9")
-	ErrVTimezoneNotYet    = errors.New("translate: emit_vtimezone is implemented in M6")
 	ErrUnknownPrivacyMode = errors.New("translate: unknown privacy mode")
 )
 
@@ -112,7 +111,7 @@ type RenderOptions struct {
 	Privacy          PrivacyMode
 	Attendees        AttendeeMode    // all (default) | self
 	DefaultAlarms    []time.Duration // added only when prev == nil (create)
-	EmitVTimezone    bool            // Phase 0 P0-8: false
+	EmitVTimezone    bool            // embed generated VTIMEZONEs (P0-8: false; iCloud adds its own)
 	Now              time.Time       // DTSTAMP
 	GoogleCalendarID string          // X-CALBRIDGE-GCAL; default "primary"
 	UID              string          // overrides iCalUID (§7.1 collision rule)
@@ -208,12 +207,20 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 	}
 	setRaw(p, ical.PropSequence, strconv.FormatInt(seq, 10))
 
-	tzids, err := setTimes(p, master.Start, master.End)
+	tzids, startT, endT, err := setTimes(p, master.Start, master.End)
 	if err != nil {
 		return nil, err
 	}
-	if len(tzids) > 0 && o.EmitVTimezone {
-		return nil, ErrVTimezoneNotYet
+	var vtzs []*ical.Component
+	if o.EmitVTimezone {
+		from, to := vtimezoneSpan(startT, endT)
+		for _, id := range tzids {
+			vtz, err := VTimezone(id, from, to)
+			if err != nil {
+				return nil, err
+			}
+			vtzs = append(vtzs, vtz)
+		}
 	}
 
 	switch master.Status {
@@ -285,6 +292,7 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 	setRaw(cal.Props, ical.PropProductID, ProdID)
 	setRaw(cal.Props, ical.PropVersion, "2.0")
 	setRaw(cal.Props, ical.PropCalendarScale, "GREGORIAN")
+	cal.Children = append(cal.Children, vtzs...)
 	cal.Children = append(cal.Children, ev.Component)
 	return cal, nil
 }
