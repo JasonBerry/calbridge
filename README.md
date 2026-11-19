@@ -75,6 +75,11 @@ Pick one always-on machine: a Linux server with systemd, or Docker. It needs out
    sudo -u calbridge calbridge once --dry-run --config /etc/calbridge/config.yaml
    ```
 
+### Google Cloud (e2-micro VM)
+
+A step-by-step guide for a locked-down, free-tier VM (about US$3.65/month for its IPv4 address) is in
+[deploy/gce.md](deploy/gce.md).
+
 ### systemd
 
 `deploy/calbridge.service` contains the install commands at the top. In short: create a `calbridge`
