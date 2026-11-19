@@ -45,6 +45,23 @@ func loadEvent(t *testing.T, name string) *calendar.Event {
 	return &ev
 }
 
+// loadExceptions reads testdata/golden/<name>.exceptions.json if present.
+func loadExceptions(t *testing.T, name string) []*calendar.Event {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "golden", name+".exceptions.json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []*calendar.Event
+	if err := json.Unmarshal(b, &evs); err != nil {
+		t.Fatalf("%s exceptions: %v", name, err)
+	}
+	return evs
+}
+
 func loadICS(t *testing.T, path string) *ical.Calendar {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -108,6 +125,22 @@ var goldenCases = []goldenCase{
 	{name: "vtimezone-allday", input: "allday-single", opts: func(o *RenderOptions) { o.EmitVTimezone = true }},
 	{name: "windows-zone"},
 	{name: "unknown-zone"},
+	// M9: recurring series (input <name>.json + optional <name>.exceptions.json).
+	{name: "rec-weekly"},
+	{name: "rec-count-exdate"},
+	{name: "rec-moved-exception"},
+	{name: "rec-cancelled-exceptions"},
+	{name: "rec-allday"},
+	{name: "rec-dst"},
+	{name: "rec-dst-vtimezone", input: "rec-dst", opts: func(o *RenderOptions) { o.EmitVTimezone = true }},
+	{name: "rec-rsvp-overrides", rsvp: RSVPView{Overrides: map[string]PartStat{
+		"20261126T220000Z": PartStatDeclined,  // Google has this exception: Apple's answer wins for it
+		"20261203T220000Z": PartStatTentative, // no Google exception yet: synthetic override
+	}}},
+	{name: "rec-prev-override", input: "rec-moved-exception", prev: "rec-apple-override",
+		opts: func(o *RenderOptions) { o.DefaultAlarms = []time.Duration{10 * time.Minute} }},
+	{name: "rec-alarms-on-create", input: "rec-moved-exception",
+		opts: func(o *RenderOptions) { o.DefaultAlarms = []time.Duration{10 * time.Minute} }},
 }
 
 func renderCase(t *testing.T, tc goldenCase) (*ical.Calendar, []byte) {
@@ -124,7 +157,7 @@ func renderCase(t *testing.T, tc goldenCase) (*ical.Calendar, []byte) {
 	if tc.prev != "" {
 		prev = loadICS(t, filepath.Join("testdata", "prev", tc.prev+".ics"))
 	}
-	cal, err := RenderSeries(loadEvent(t, in), nil, tc.rsvp, prev, o)
+	cal, err := RenderSeries(loadEvent(t, in), loadExceptions(t, in), tc.rsvp, prev, o)
 	if err != nil {
 		t.Fatalf("RenderSeries: %v", err)
 	}
@@ -171,13 +204,19 @@ func TestRoundTripExtract(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cal, b := renderCase(t, tc)
 			back := decode(t, b)
-			want, _, err := ExtractSelfStatus(cal, selfEmail)
+			want, wantOv, err := ExtractSelfStatus(cal, selfEmail)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, overrides, err := ExtractSelfStatus(back, strings.ToUpper(selfEmail))
-			if err != nil || got != want || len(overrides) != 0 {
-				t.Fatalf("round trip = %s, %v, %v; want %s", got, overrides, err, want)
+			got, gotOv, err := ExtractSelfStatus(back, strings.ToUpper(selfEmail))
+			if err != nil || got != want {
+				t.Fatalf("round trip = %s, %v; want %s", got, err, want)
+			}
+			if diff := cmp.Diff(wantOv, gotOv); diff != "" {
+				t.Fatalf("override PARTSTATs changed in round trip (-want +got):\n%s", diff)
+			}
+			if hasRRule := masterEvent(back).Props.Get(ical.PropRecurrenceRule) != nil; hasRRule != strings.HasPrefix(tc.name, "rec-") {
+				t.Errorf("master has RRULE = %v", hasRRule)
 			}
 			for _, prop := range []string{ical.PropSummary, ical.PropDescription, ical.PropLocation} {
 				w, _ := cal.Children[0].Props.Text(prop)
@@ -344,14 +383,14 @@ func TestRenderErrors(t *testing.T) {
 		want error
 	}{
 		{"cancelled", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event { e.Status = "cancelled"; return nil }, ErrCancelled},
-		{"recurring master", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event {
-			e.Recurrence = []string{"RRULE:FREQ=WEEKLY"}
-			return nil
-		}, ErrRecurringNotYet},
-		{"exceptions", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event {
+		{"instance as master", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event { e.RecurringEventId = "m"; return nil }, ErrInvalidEvent},
+		{"exceptions without recurrence", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event {
 			return []*calendar.Event{{Id: "x"}}
-		}, ErrRecurringNotYet},
-		{"instance", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event { e.RecurringEventId = "m"; return nil }, ErrRecurringNotYet},
+		}, ErrInvalidEvent},
+		{"bad recurrence line", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event {
+			e.Recurrence = []string{"RRULE FREQ=WEEKLY"}
+			return nil
+		}, ErrInvalidEvent},
 		{"not invited", func(e *calendar.Event, _ *RenderOptions) []*calendar.Event {
 			e.Attendees = e.Attendees[:1]
 			return nil

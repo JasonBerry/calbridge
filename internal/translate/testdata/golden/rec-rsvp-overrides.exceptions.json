@@ -1,0 +1,43 @@
+[
+  {
+    "kind": "calendar#event",
+    "id": "rec07aaaabbbbcccc_20261126T220000Z",
+    "iCalUID": "rec07aaaabbbbcccc@google.com",
+    "etag": "\"1\"",
+    "status": "confirmed",
+    "eventType": "default",
+    "created": "2026-11-18T04:43:28.000Z",
+    "updated": "2026-11-18T04:43:35.956Z",
+    "summary": "Weekly sync",
+    "sequence": 0,
+    "organizer": {
+      "email": "ORGANIZER_TEST@example.com"
+    },
+    "attendees": [
+      {
+        "email": "ORGANIZER_TEST@example.com",
+        "organizer": true,
+        "responseStatus": "accepted"
+      },
+      {
+        "email": "user@YOUR_DOMAIN",
+        "self": true,
+        "responseStatus": "accepted"
+      }
+    ],
+    "start": {
+      "dateTime": "2026-11-27T09:00:00+11:00",
+      "timeZone": "Australia/Sydney"
+    },
+    "end": {
+      "dateTime": "2026-11-27T09:30:00+11:00",
+      "timeZone": "Australia/Sydney"
+    },
+    "recurringEventId": "rec07aaaabbbbcccc",
+    "originalStartTime": {
+      "dateTime": "2026-11-27T09:00:00+11:00",
+      "timeZone": "Australia/Sydney"
+    },
+    "description": "This week: demo"
+  }
+]

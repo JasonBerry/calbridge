@@ -39,7 +39,6 @@ var (
 	ErrNoSelfAttendee     = errors.New("translate: user is not an attendee")
 	ErrNoOrganizer        = errors.New("translate: event has no organizer")
 	ErrInvalidEvent       = errors.New("translate: invalid event")
-	ErrRecurringNotYet    = errors.New("translate: recurring events are rendered from M9")
 	ErrUnknownPrivacyMode = errors.New("translate: unknown privacy mode")
 )
 
@@ -139,22 +138,31 @@ func SelfAttendee(ev *calendar.Event) *calendar.EventAttendee {
 // UID returns the iCalendar UID for ev (its iCalUID).
 func UID(ev *calendar.Event) string { return ev.ICalUID }
 
-// RenderSeries builds one VCALENDAR for a Google event. M5 handles single
-// events only: a master with recurrence or any exceptions returns
-// ErrRecurringNotYet.
+// RenderSeries builds one VCALENDAR for a Google event (§7.2) or series
+// (§7.8): the master VEVENT (with RRULE/RDATE/EXDATE copied from
+// recurrence[]), one override VEVENT per non-cancelled exception
+// (RECURRENCE-ID = originalStartTime in the master's DTSTART format), and an
+// EXDATE per cancelled exception. st.Overrides adds or overrides the
+// PARTSTAT of single occurrences; an occurrence Google has no exception for
+// yet gets an override derived from the master, so a per-occurrence
+// response the user made in Apple survives our rewrite (P0-8).
 //
-// prev is the current iCloud object, if any: its VALARMs and X-APPLE-*,
-// X-MOZ-*, X-WR-* properties are carried over so alarms and Apple state the
-// user has survive our updates (§7.2, §7.7).
+// prev is the current iCloud object, if any: VALARMs and X-APPLE-*, X-MOZ-*,
+// X-WR-* properties are carried over from its master and from overrides with
+// the same RECURRENCE-ID (§7.2, §7.7).
 func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPView, prev *ical.Calendar, o RenderOptions) (*ical.Calendar, error) {
 	if master == nil {
 		return nil, fmt.Errorf("%w: nil event", ErrInvalidEvent)
 	}
-	if len(master.Recurrence) > 0 || len(exceptions) > 0 || master.RecurringEventId != "" {
-		return nil, ErrRecurringNotYet
+	if master.RecurringEventId != "" {
+		return nil, fmt.Errorf("%w: %s is an instance, not a master", ErrInvalidEvent, master.Id)
 	}
 	if master.Status == "cancelled" {
 		return nil, ErrCancelled
+	}
+	recurring := len(master.Recurrence) > 0
+	if !recurring && len(exceptions) > 0 {
+		return nil, fmt.Errorf("%w: exceptions for a non-recurring event", ErrInvalidEvent)
 	}
 	switch o.Privacy {
 	case PrivacyFull, PrivacyHonorPrivate, PrivacyBusyOnly:
@@ -191,29 +199,47 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 		return nil, ErrNoSelfAttendee
 	}
 
-	ev := ical.NewEvent()
-	p := ev.Props
-	setText(p, ical.PropUID, uid)
-	setUTC(p, ical.PropDateTimeStamp, o.Now)
-	if t, ok := parseGoogleTime(master.Created); ok {
-		setUTC(p, ical.PropCreated, t)
+	partstat := st.Master
+	if partstat == "" {
+		partstat = GoogleToPartStat(self.ResponseStatus)
 	}
-	if t, ok := parseGoogleTime(master.Updated); ok {
-		setUTC(p, ical.PropLastModified, t)
-	}
-	seq := master.Sequence
-	if seq < o.MinSequence {
-		seq = o.MinSequence
-	}
-	setRaw(p, ical.PropSequence, strconv.FormatInt(seq, 10))
-
-	tzids, startT, endT, err := setTimes(p, master.Start, master.End)
+	mb, err := buildEvent(master, uid, partstat, o)
 	if err != nil {
 		return nil, err
 	}
+	tzids := append([]string(nil), mb.tzids...)
+	spanStart, spanEnd := mb.start, mb.end
+
+	var overrides []*built
+	if recurring {
+		if err := addRecurrence(mb.comp, master.Recurrence); err != nil {
+			return nil, err
+		}
+		if u, ok := rruleUntil(master.Recurrence); ok {
+			spanEnd = maxTime(spanEnd, u)
+		} else if !mb.start.IsZero() {
+			spanEnd = maxTime(spanEnd, mb.start.AddDate(5, 0, 0)) // open-ended or COUNT (§7.3)
+		}
+		overrides, err = buildOverrides(master, exceptions, st, mb, uid, o)
+		if err != nil {
+			return nil, err
+		}
+		for _, ov := range overrides {
+			for _, id := range ov.tzids {
+				if !contains(tzids, id) {
+					tzids = append(tzids, id)
+				}
+			}
+			if !ov.start.IsZero() && (spanStart.IsZero() || ov.start.Before(spanStart)) {
+				spanStart = ov.start
+			}
+			spanEnd = maxTime(spanEnd, ov.end)
+		}
+	}
+
 	var vtzs []*ical.Component
-	if o.EmitVTimezone {
-		from, to := vtimezoneSpan(startT, endT)
+	if o.EmitVTimezone && len(tzids) > 0 {
+		from, to := vtimezoneSpan(spanStart, spanEnd)
 		for _, id := range tzids {
 			vtz, err := VTimezone(id, from, to)
 			if err != nil {
@@ -223,18 +249,94 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 		}
 	}
 
-	switch master.Status {
+	if pm := masterEvent(prev); pm != nil {
+		carryOver(mb.comp, pm)
+	} else if prev == nil {
+		for _, d := range o.DefaultAlarms {
+			mb.comp.Children = append(mb.comp.Children, displayAlarm(d))
+		}
+	}
+	prevOverrides := overrideEvents(prev)
+	for _, ov := range overrides {
+		if po, ok := prevOverrides[ov.rid]; ok {
+			carryOver(ov.comp, po)
+		} else if prev == nil {
+			for _, d := range o.DefaultAlarms {
+				ov.comp.Children = append(ov.comp.Children, displayAlarm(d))
+			}
+		}
+	}
+
+	cal := ical.NewCalendar()
+	setRaw(cal.Props, ical.PropProductID, ProdID)
+	setRaw(cal.Props, ical.PropVersion, "2.0")
+	setRaw(cal.Props, ical.PropCalendarScale, "GREGORIAN")
+	cal.Children = append(cal.Children, vtzs...)
+	cal.Children = append(cal.Children, mb.comp)
+	for _, ov := range overrides {
+		cal.Children = append(cal.Children, ov.comp)
+	}
+	return cal, nil
+}
+
+// built is one rendered VEVENT.
+type built struct {
+	comp       *ical.Component
+	tzids      []string
+	start, end time.Time // instants; zero for all-day
+	allDay     bool
+	startZone  string // TZID of DTSTART ("" = UTC or all-day)
+	rid        string // normalised RECURRENCE-ID (overrides only)
+}
+
+// buildEvent renders the properties shared by masters and overrides.
+func buildEvent(ev *calendar.Event, uid string, partstat PartStat, o RenderOptions) (*built, error) {
+	if ev.Organizer == nil || ev.Organizer.Email == "" {
+		return nil, ErrNoOrganizer
+	}
+	self := SelfAttendee(ev)
+	if self == nil {
+		return nil, ErrNoSelfAttendee
+	}
+	comp := ical.NewEvent().Component
+	p := comp.Props
+	setText(p, ical.PropUID, uid)
+	setUTC(p, ical.PropDateTimeStamp, o.Now)
+	if t, ok := parseGoogleTime(ev.Created); ok {
+		setUTC(p, ical.PropCreated, t)
+	}
+	if t, ok := parseGoogleTime(ev.Updated); ok {
+		setUTC(p, ical.PropLastModified, t)
+	}
+	seq := ev.Sequence
+	if seq < o.MinSequence {
+		seq = o.MinSequence
+	}
+	setRaw(p, ical.PropSequence, strconv.FormatInt(seq, 10))
+
+	tzids, startT, endT, err := setTimes(p, ev.Start, ev.End)
+	if err != nil {
+		return nil, err
+	}
+	b := &built{comp: comp, tzids: tzids, start: startT, end: endT, allDay: ev.Start.Date != ""}
+	if b.allDay {
+		b.start, _ = time.Parse("2006-01-02", ev.Start.Date)
+		b.end, _ = time.Parse("2006-01-02", ev.End.Date)
+	}
+	b.startZone = p.Get(ical.PropDateTimeStart).Params.Get(ical.ParamTimezoneID)
+
+	switch ev.Status {
 	case "tentative":
 		setRaw(p, ical.PropStatus, "TENTATIVE")
 	default:
 		setRaw(p, ical.PropStatus, "CONFIRMED")
 	}
-	if master.Transparency == "transparent" {
+	if ev.Transparency == "transparent" {
 		setRaw(p, ical.PropTransparency, "TRANSPARENT")
 	} else {
 		setRaw(p, ical.PropTransparency, "OPAQUE")
 	}
-	private := master.Visibility == "private" || master.Visibility == "confidential"
+	private := ev.Visibility == "private" || ev.Visibility == "confidential"
 	if private {
 		setRaw(p, ical.PropClass, "PRIVATE")
 	} else {
@@ -245,28 +347,24 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 	if redact {
 		setText(p, ical.PropSummary, "Busy")
 	} else {
-		summary := strings.TrimSpace(master.Summary)
+		summary := strings.TrimSpace(ev.Summary)
 		if summary == "" {
 			summary = "(No title)"
 		}
 		setText(p, ical.PropSummary, summary)
-		if loc := strings.TrimSpace(master.Location); loc != "" {
+		if loc := strings.TrimSpace(ev.Location); loc != "" {
 			setText(p, ical.PropLocation, loc)
 		}
-		if u := videoURL(master); u != "" {
+		if u := videoURL(ev); u != "" {
 			setRaw(p, ical.PropURL, u)
 		}
-		setText(p, ical.PropDescription, description(master))
+		setText(p, ical.PropDescription, description(ev))
 	}
 
-	p.Set(organizerProp(master.Organizer, o.ScheduleAgent))
-	partstat := st.Master
-	if partstat == "" {
-		partstat = GoogleToPartStat(self.ResponseStatus)
-	}
+	p.Set(organizerProp(ev.Organizer, o.ScheduleAgent))
 	// Redacted mirrors never list other guests.
 	others := o.Attendees == AttendeesAll && !redact
-	for _, a := range master.Attendees {
+	for _, a := range ev.Attendees {
 		switch {
 		case a == nil:
 		case a == self:
@@ -276,25 +374,26 @@ func RenderSeries(master *calendar.Event, exceptions []*calendar.Event, st RSVPV
 		}
 	}
 
-	setRaw(p, PropGoogleID, master.Id)
+	setRaw(p, PropGoogleID, ev.Id)
 	setRaw(p, PropGoogleCalendar, o.GoogleCalendarID)
 	setRaw(p, PropRenderVersion, strconv.Itoa(RenderVersion))
+	return b, nil
+}
 
-	if pm := masterEvent(prev); pm != nil {
-		carryOver(ev.Component, pm)
-	} else if prev == nil {
-		for _, d := range o.DefaultAlarms {
-			ev.Children = append(ev.Children, displayAlarm(d))
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
 		}
 	}
-
-	cal := ical.NewCalendar()
-	setRaw(cal.Props, ical.PropProductID, ProdID)
-	setRaw(cal.Props, ical.PropVersion, "2.0")
-	setRaw(cal.Props, ical.PropCalendarScale, "GREGORIAN")
-	cal.Children = append(cal.Children, vtzs...)
-	cal.Children = append(cal.Children, ev.Component)
-	return cal, nil
+	return false
 }
 
 func organizerProp(org *calendar.EventOrganizer, agent string) *ical.Prop {
