@@ -33,7 +33,7 @@ func commands() []command {
 		{name: "once", summary: "run one sync cycle (--dry-run: plan only)", run: runOnce},
 		{name: "status", summary: "show sync status from the database", run: runStatus},
 		{name: "calendars", summary: "list iCloud calendars and their hrefs", run: runCalendars},
-		{name: "reconcile", summary: "rebuild mappings (not implemented yet: M12)", run: notImplemented("M12")},
+		{name: "reconcile", summary: "compare Google, iCloud and the database; repair (--apply)", run: runReconcile},
 		{name: "spike", summary: "Phase 0 experiments", hidden: true, run: runSpike},
 	}
 }
@@ -91,10 +91,4 @@ func usage(w io.Writer) {
 func runVersion(_ context.Context, _ []string, stdout, _ io.Writer) error {
 	_, err := fmt.Fprintf(stdout, "calbridge %s\n", version)
 	return err
-}
-
-func notImplemented(milestone string) func(context.Context, []string, io.Writer, io.Writer) error {
-	return func(context.Context, []string, io.Writer, io.Writer) error {
-		return fmt.Errorf("not implemented yet (planned for %s)", milestone)
-	}
 }

@@ -590,3 +590,50 @@ func TestNormalizeRecurrenceIDRepeatedHour(t *testing.T) {
 		t.Errorf("alias zone: %s", got)
 	}
 }
+
+// TestSemanticHashIgnoresAppleRewrite: an object Apple rewrote after the
+// user responded (P0-4/P0-5) and iCloud's VTIMEZONE swap compare equal to a
+// fresh rendering; a real content change does not.
+func TestSemanticHashIgnoresAppleRewrite(t *testing.T) {
+	ev := loadEvent(t, "meet-invite")
+	ours, err := RenderSeries(ev, nil, RSVPView{}, nil, baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	apple := loadICS(t, filepath.Join("testdata", "prev", "apple-rsvp.ics"))
+	// The fixture is a minimal Apple object; give it the content we render.
+	stored, err := RenderSeries(ev, nil, RSVPView{Master: PartStatAccepted}, apple, baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Encode(stored)
+	rewritten := decode(t, b)
+	for i, p := range rewritten.Children[0].Props[ical.PropAttendee] {
+		p.Params.Set("CUTYPE", "UNKNOWN")
+		p.Params.Set("EMAIL", strings.TrimPrefix(p.Value, "mailto:"))
+		p.Params.Del(ical.ParamRSVP)
+		rewritten.Children[0].Props[ical.PropAttendee][i] = p
+	}
+	org := rewritten.Children[0].Props.Get(ical.PropOrganizer)
+	org.Params.Set("EMAIL", "ORGANIZER_TEST@example.com")
+	setRaw(rewritten.Props, ical.PropProductID, "-//Apple Inc.//iPhone OS 27.0.1//EN")
+	vtz, _ := VTimezone("Australia/Sydney", time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	rewritten.Children = append(rewritten.Children, vtz)
+
+	if SemanticHash(ours, selfEmail) != SemanticHash(rewritten, selfEmail) {
+		t.Fatal("Apple's rewrite counted as a content change")
+	}
+	changed := *ev
+	changed.Summary = "Renamed"
+	other, _ := RenderSeries(&changed, nil, RSVPView{}, nil, baseOpts())
+	if SemanticHash(other, selfEmail) == SemanticHash(ours, selfEmail) {
+		t.Fatal("summary change not detected")
+	}
+	guests := loadEvent(t, "guests")
+	g1, _ := RenderSeries(guests, nil, RSVPView{}, nil, baseOpts())
+	guests.Attendees[2].ResponseStatus = "declined"
+	g2, _ := RenderSeries(guests, nil, RSVPView{}, nil, baseOpts())
+	if SemanticHash(g1, selfEmail) == SemanticHash(g2, selfEmail) {
+		t.Fatal("another guest's response change not detected")
+	}
+}

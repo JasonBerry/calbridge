@@ -372,3 +372,69 @@ func runCalendars(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	return nil
 }
+
+// runReconcile is `calbridge reconcile [--apply] [--restore] [--delete-orphans]`
+// (§9). Without --apply it only prints the plan.
+func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("reconcile", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var cf commonFlags
+	cf.register(fs)
+	apply := fs.Bool("apply", false, "carry out the plan (default: print it only)")
+	restore := fs.Bool("restore", false, "recreate mirrors you deleted in Apple Calendar")
+	deleteOrphans := fs.Bool("delete-orphans", false, "with --apply: delete calbridge objects whose Google event is gone")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	a, err := openApp(ctx, &cf, stderr, true)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	_, _ = fmt.Fprintf(stdout, "calendar %q (%s)\n", a.cal.DisplayName, a.cal.Href)
+	plan, err := a.engine.Reconcile(ctx, syncer.ReconcileOptions{Apply: *apply, Restore: *restore, DeleteOrphans: *deleteOrphans})
+	printReconcile(stdout, plan, *deleteOrphans)
+	return err
+}
+
+func printReconcile(w io.Writer, p syncer.ReconcilePlan, deleteOrphans bool) {
+	counts := map[string]int{}
+	for _, it := range p.Items {
+		counts[it.Action]++
+	}
+	acts := make([]string, 0, len(counts))
+	for a := range counts {
+		acts = append(acts, a)
+	}
+	sort.Strings(acts)
+	parts := make([]string, 0, len(acts))
+	for _, a := range acts {
+		parts = append(parts, fmt.Sprintf("%s %d", a, counts[a]))
+	}
+	mode := "plan (nothing changed; add --apply to carry it out)"
+	if p.Applied {
+		mode = fmt.Sprintf("applied (%d remote writes)", p.Report.Writes())
+	}
+	if len(parts) == 0 {
+		parts = []string{"nothing to do"}
+	}
+	_, _ = fmt.Fprintf(w, "reconcile %s: %s\n", mode, strings.Join(parts, ", "))
+	var shown []syncer.ReconcileItem
+	for _, it := range p.Items {
+		if it.Action != syncer.ActOK {
+			shown = append(shown, it)
+		}
+	}
+	if len(shown) > 0 {
+		_, _ = fmt.Fprintln(w)
+		tw := newTable(w)
+		_, _ = fmt.Fprintln(tw, "ACTION\tGOOGLE ID\tICLOUD HREF\tNOTE")
+		for _, it := range shown {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", it.Action, dash(it.GoogleID), it.Href, it.Note)
+		}
+		_ = tw.Flush()
+	}
+	if counts[syncer.ActOrphan] > 0 && (!p.Applied || !deleteOrphans) {
+		_, _ = fmt.Fprintln(w, "\norphans are only reported; `--apply --delete-orphans` deletes them")
+	}
+}

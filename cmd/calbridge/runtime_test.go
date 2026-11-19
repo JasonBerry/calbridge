@@ -223,3 +223,21 @@ store:
 		t.Errorf("stderr %q", errb.String())
 	}
 }
+
+func TestPrintReconcile(t *testing.T) {
+	var b bytes.Buffer
+	printReconcile(&b, syncer.ReconcilePlan{Items: []syncer.ReconcileItem{
+		{Action: syncer.ActOK, GoogleID: "ok1", Href: "/c/1.ics"},
+		{Action: syncer.ActAdopt, GoogleID: "a1", Href: "/c/2.ics", Note: "mapping missing"},
+		{Action: syncer.ActOrphan, Href: "/c/3.ics", Note: "no X-CALBRIDGE-GID"},
+	}}, false)
+	out := b.String()
+	for _, want := range []string{"plan (nothing changed", "adopt 1", "ok 1", "orphan 1", "a1", "mapping missing", "--delete-orphans"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "ok1") {
+		t.Errorf("ok rows listed:\n%s", out)
+	}
+}

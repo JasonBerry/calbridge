@@ -18,7 +18,7 @@ func TestRun(t *testing.T) {
 		{args: nil, code: 2, stderrIn: "usage: calbridge"},
 		{args: []string{"help"}, code: 0, stderrIn: "usage: calbridge"},
 		{args: []string{"nope"}, code: 2, stderrIn: `unknown command "nope"`},
-		{args: []string{"reconcile"}, code: 1, stderrIn: "not implemented"},
+		{args: []string{"reconcile", "--config", "/nonexistent/calbridge.yaml"}, code: 1, stderrIn: "read config"},
 		{args: []string{"serve", "--config", "/nonexistent/calbridge.yaml"}, code: 1, stderrIn: "read config"},
 		{args: []string{"once", "--bogus"}, code: 2},
 	}

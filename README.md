@@ -4,8 +4,8 @@ Mirrors Google Calendar invitations sent to a hidden Google account (`user@YOUR_
 existing iCloud calendar over CalDAV, and sends RSVP changes made in Apple Calendar back to the
 organizer through the Google Calendar API.
 
-Status: **Phase 0 complete; milestones M0–M11 done.** The sync engine, CLI and status server work;
-reconcile (M12), the live trial (M13) and deployment files (M14) are next. Phase 0 results are in
+Status: **Phase 0 complete; milestones M0–M12 done.** The sync engine, CLI, status server and
+reconcile work; the live trial (M13) and deployment files (M14) are next. Phase 0 results are in
 [docs/phase0-results.md](docs/phase0-results.md).
 
 - Design: [docs/PLAN.md](docs/PLAN.md)
@@ -27,6 +27,8 @@ calbridge once --dry-run --config CONFIG     # plan one cycle: prints the writes
 calbridge once --config CONFIG               # run one cycle (exit 1 on errors)
 calbridge serve --config CONFIG              # loop every sync.interval; GET /healthz and /status on server.listen
 calbridge status --config CONFIG             # last syncs, mirrors by state, rows retrying or parked
+calbridge reconcile --config CONFIG          # compare Google, iCloud and the database; prints a plan
+calbridge reconcile --apply --config CONFIG  # repair: rebuild mappings, rewrite stale mirrors, create missing ones
 calbridge auth --config CONFIG               # (re)authorize Google
 ```
 

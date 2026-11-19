@@ -125,3 +125,63 @@ func Fold(b []byte) []byte {
 	}
 	return out.Bytes()
 }
+
+// appleAddedParams are attendee/organizer parameters Apple adds or drops when
+// it rewrites an object (P0-4/P0-5/P0-4 E: CUTYPE=UNKNOWN, EMAIL=, RSVP
+// dropped on iPhone).
+var appleAddedParams = map[string]bool{"CUTYPE": true, "EMAIL": true, ical.ParamRSVP: true}
+
+// SemanticHash compares a stored iCloud object with calbridge's rendering
+// of the same event (reconcile, §9): it covers only the VEVENTs, ignores
+// what ContentHash ignores, every user PARTSTAT (compared separately), and
+// the parameters Apple rewrites, and does not depend on VTIMEZONEs (iCloud
+// replaces them, P0-4/P0-8) or PRODID.
+func SemanticHash(cal *ical.Calendar, selfEmail string) string {
+	h := sha256.New()
+	if cal == nil {
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	self := strings.ToLower(strings.TrimSpace(selfEmail))
+	type ev struct {
+		key   string
+		lines []string
+	}
+	var evs []ev
+	for _, c := range cal.Children {
+		if c.Name != ical.CompEvent {
+			continue
+		}
+		e := ev{}
+		if rid := c.Props.Get(ical.PropRecurrenceID); rid != nil {
+			e.key = NormalizeRecurrenceID(rid)
+		}
+		for name, props := range c.Props {
+			if volatileProps[name] || isPreserved(name) {
+				continue
+			}
+			for _, p := range props {
+				q := p
+				q.Params = ical.Params{}
+				isSelf := p.Name == ical.PropAttendee && self != "" &&
+					(attendeeAddress(p.Value) == self || strings.ToLower(p.Params.Get("EMAIL")) == self)
+				for k, v := range p.Params {
+					if appleAddedParams[k] || (isSelf && k == ical.ParamParticipationStatus) {
+						continue
+					}
+					q.Params[k] = v
+				}
+				if name == ical.PropAttendee || name == ical.PropOrganizer {
+					q.Value = "mailto:" + attendeeAddress(p.Value)
+				}
+				e.lines = append(e.lines, canonicalProp(q, ""))
+			}
+		}
+		sort.Strings(e.lines)
+		evs = append(evs, e)
+	}
+	sort.Slice(evs, func(i, j int) bool { return evs[i].key < evs[j].key })
+	for _, e := range evs {
+		_, _ = h.Write([]byte("VEVENT " + e.key + "\n" + strings.Join(e.lines, "\n") + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}

@@ -766,3 +766,5 @@ func withoutSelf(cal *ical.Calendar) *ical.Calendar {
 	}
 	return out
 }
+
+func hrefForUID(uid string) string { return translate.ObjectHref(calHref, uid) }
