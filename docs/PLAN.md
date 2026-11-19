@@ -823,10 +823,10 @@ icloud:
   calendar: "Home"              # display name; or calendar_href for exact match
   calendar_href: ""
   attendee_email: user@YOUR_DOMAIN
-  schedule_agent: ""            # "" | CLIENT | NONE      (P0-4)
+  schedule_agent: NONE          # "" | CLIENT | NONE (P0-4: NONE chosen)
   delete_mode: plain            # plain | schedule_reply_f | neutralize_then_delete (P0-9)
   sync_method: auto             # auto | sync-collection | ctag (P0-3)
-  emit_vtimezone: true          # (P0-8)
+  emit_vtimezone: false         # P0-8: iCloud inserts its own VTIMEZONE
   rate_limit_rps: 5
 sync:
   interval: 2m

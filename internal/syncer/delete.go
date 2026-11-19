@@ -50,6 +50,7 @@ func (r *run) deleteMirror(ctx context.Context, m *store.Mapping) error {
 	r.rep.Deleted++
 	r.logOp(ctx, "delete", m)
 	m.State, m.DeletedAt = store.StateDeleted, r.now
+	clearFailures(m)
 	return r.q.UpdateMapping(ctx, m)
 }
 
@@ -87,7 +88,7 @@ func (r *run) reconcileMissing(ctx context.Context, seen map[string]bool) error 
 	}
 	var errs []error
 	for i := range del {
-		if err := r.deleteMirror(ctx, &del[i]); err != nil {
+		if err := r.item(ctx, func(ictx context.Context) error { return r.deleteMirror(ictx, &del[i]) }); err != nil {
 			errs = append(errs, err)
 		}
 	}

@@ -72,13 +72,26 @@ func (r *run) googleToICloud(ctx context.Context) error {
 	}
 	var errs []error
 	for _, sid := range series {
-		if err := r.processSeries(ctx, sid, 0); err != nil {
-			r.rep.Failed++
-			r.log.WarnContext(ctx, "series failed", "google_id", sid, "err", err)
+		err := r.item(ctx, func(ictx context.Context) error { return r.processSeries(ictx, sid, 0) })
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			break
+		}
+		if IsAuth(err) {
+			return err
+		}
+		r.rep.Failed++
+		r.log.WarnContext(ctx, "series failed", "google_id", sid, "class", ErrorClass(err), "err", err)
+		if r.recordFailure(ctx, sid, err) {
+			r.soft = append(r.soft, fmt.Errorf("series %s (queued for retry): %w", sid, err))
+		} else {
 			errs = append(errs, fmt.Errorf("series %s: %w", sid, err))
 		}
 	}
-	if full {
+	if full && ctx.Err() == nil {
 		if err := r.reconcileMissing(ctx, seen); err != nil {
 			errs = append(errs, err)
 		}
@@ -136,28 +149,36 @@ func (r *run) retryPending(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var errs []error
 	for i := range ms {
 		m := ms[i]
-		if m.GoogleCalendarID != r.opts().GoogleCalendarID {
+		if m.GoogleCalendarID != r.opts().GoogleCalendarID || !r.due(&m) {
 			continue
 		}
-		switch {
-		case m.State == store.StatePendingDelete:
-			err = r.deleteMirror(ctx, &m)
-		case m.State == store.StatePendingPut:
-			err = r.processSeries(ctx, m.GoogleEventID, 0)
-		case m.RSVPPending != "":
-			err = r.pushRSVP(ctx, &m, m.RSVPPending)
-		default:
-			err = r.retryInstanceRSVPs(ctx, &m)
+		err := r.item(ctx, func(ictx context.Context) error {
+			switch {
+			case m.State == store.StatePendingDelete:
+				return r.deleteMirror(ictx, &m)
+			case m.State == store.StatePendingPut:
+				return r.processSeries(ictx, m.GoogleEventID, 0)
+			case m.RSVPPending != "":
+				return r.pushRSVP(ictx, &m, m.RSVPPending)
+			}
+			return r.retryInstanceRSVPs(ictx, &m)
+		})
+		if err == nil {
+			continue
 		}
-		if err != nil {
-			r.rep.Failed++
-			errs = append(errs, fmt.Errorf("retry %s: %w", m.GoogleEventID, err))
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
+		if IsAuth(err) {
+			return err
+		}
+		r.rep.Failed++
+		r.recordFailure(ctx, m.GoogleEventID, err)
+		r.soft = append(r.soft, fmt.Errorf("retry %s: %w", m.GoogleEventID, err))
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // loadSeries returns the cached master (nil if unknown) and exceptions.
@@ -285,6 +306,7 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 	}
 	if m != nil && m.State == store.StateSynced && m.ContentHash == hash && !r.rsvpDiffers(prev, plan) {
 		r.rep.Unchanged++
+		clearFailures(m)
 		m.GoogleStatus, m.AgreedStatus = plan.google, plan.agreed
 		if prev != nil {
 			m.ICloudETag = prev.ETag
@@ -425,6 +447,7 @@ func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Even
 func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Event, etag, hash string, plan rsvpPlan) error {
 	m.State, m.ICloudETag, m.ContentHash, m.SkipReason = store.StateSynced, etag, hash, ""
 	m.DeletedAt = time.Time{}
+	clearFailures(m)
 	if ev.Sequence > m.Sequence {
 		m.Sequence = ev.Sequence
 	}

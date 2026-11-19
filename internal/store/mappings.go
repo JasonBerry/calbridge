@@ -32,11 +32,24 @@ type Mapping struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	DeletedAt         time.Time
+	// Retry state (migration 0002): consecutive failures, earliest next
+	// retry, and the last error class.
+	Failures      int
+	NextAttemptAt time.Time
+	LastError     string
 }
+
+// MaxFailures is how many consecutive failures park a row (§8.7).
+const MaxFailures = 10
+
+// Parked reports whether the row has failed too often to be retried
+// automatically; a new change to its Google event retries it.
+func (m Mapping) Parked() bool { return m.Failures >= MaxFailures }
 
 const mappingCols = `id, google_calendar_id, google_event_id, ical_uid, icloud_calendar, icloud_href,
 	icloud_etag, state, skip_reason, last_google_etag, last_google_updated, sequence, content_hash,
-	google_status, icloud_partstat, agreed_status, rsvp_pending, created_at, updated_at, deleted_at`
+	google_status, icloud_partstat, agreed_status, rsvp_pending, created_at, updated_at, deleted_at,
+	failures, next_attempt_at, last_error`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -44,22 +57,23 @@ func scanMapping(r scanner) (Mapping, error) {
 	var (
 		m                                                   Mapping
 		etag, skip, gEtag, gUpd, hash, gs, ip, agreed, rsvp sql.NullString
-		created, updated, deleted                           sql.NullString
+		created, updated, deleted, next, lastErr            sql.NullString
 		state                                               string
 	)
 	err := r.Scan(&m.ID, &m.GoogleCalendarID, &m.GoogleEventID, &m.ICalUID, &m.ICloudCalendar, &m.ICloudHref,
 		&etag, &state, &skip, &gEtag, &gUpd, &m.Sequence, &hash,
-		&gs, &ip, &agreed, &rsvp, &created, &updated, &deleted)
+		&gs, &ip, &agreed, &rsvp, &created, &updated, &deleted, &m.Failures, &next, &lastErr)
 	if err != nil {
 		return m, err
 	}
 	m.State = State(state)
 	m.ICloudETag, m.SkipReason, m.LastGoogleETag, m.ContentHash = etag.String, skip.String, gEtag.String, hash.String
 	m.GoogleStatus, m.ICloudPartStat, m.AgreedStatus, m.RSVPPending = gs.String, ip.String, agreed.String, rsvp.String
+	m.LastError = lastErr.String
 	for _, p := range []struct {
 		dst *time.Time
 		src sql.NullString
-	}{{&m.LastGoogleUpdated, gUpd}, {&m.CreatedAt, created}, {&m.UpdatedAt, updated}, {&m.DeletedAt, deleted}} {
+	}{{&m.LastGoogleUpdated, gUpd}, {&m.CreatedAt, created}, {&m.UpdatedAt, updated}, {&m.DeletedAt, deleted}, {&m.NextAttemptAt, next}} {
 		if *p.dst, err = parseTime(p.src); err != nil {
 			return m, err
 		}
@@ -104,12 +118,14 @@ func (q *Queries) CreateMapping(ctx context.Context, m *Mapping) error {
 	res, err := q.x.ExecContext(ctx, `INSERT INTO mappings (
 		google_calendar_id, google_event_id, ical_uid, icloud_calendar, icloud_href, icloud_etag, state,
 		skip_reason, last_google_etag, last_google_updated, sequence, content_hash, google_status,
-		icloud_partstat, agreed_status, rsvp_pending, created_at, updated_at, deleted_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		icloud_partstat, agreed_status, rsvp_pending, created_at, updated_at, deleted_at,
+		failures, next_attempt_at, last_error)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.GoogleCalendarID, m.GoogleEventID, m.ICalUID, m.ICloudCalendar, m.ICloudHref, nullStr(m.ICloudETag),
 		string(m.State), nullStr(m.SkipReason), nullStr(m.LastGoogleETag), fmtTime(m.LastGoogleUpdated),
 		m.Sequence, nullStr(m.ContentHash), nullStr(m.GoogleStatus), nullStr(m.ICloudPartStat),
-		nullStr(m.AgreedStatus), nullStr(m.RSVPPending), now, now, fmtTime(m.DeletedAt))
+		nullStr(m.AgreedStatus), nullStr(m.RSVPPending), now, now, fmtTime(m.DeletedAt),
+		m.Failures, fmtTime(m.NextAttemptAt), nullStr(m.LastError))
 	if err != nil {
 		return wrapErr("create mapping", err)
 	}
@@ -138,7 +154,7 @@ func (q *Queries) UpdateMapping(ctx context.Context, m *Mapping) error {
 		nullStr(m.GoogleStatus), nullStr(m.ICloudPartStat), nullStr(m.AgreedStatus), nullStr(m.RSVPPending),
 	}
 	now := q.stamp()
-	args = append(args, now, fmtTime(m.DeletedAt), m.ID)
+	args = append(args, now, fmtTime(m.DeletedAt), m.Failures, fmtTime(m.NextAttemptAt), nullStr(m.LastError), m.ID)
 	for _, s := range sources {
 		args = append(args, string(s))
 	}
@@ -146,7 +162,7 @@ func (q *Queries) UpdateMapping(ctx context.Context, m *Mapping) error {
 		ical_uid=?, icloud_calendar=?, icloud_href=?, icloud_etag=?, state=?, skip_reason=?,
 		last_google_etag=?, last_google_updated=?, sequence=?, content_hash=?,
 		google_status=?, icloud_partstat=?, agreed_status=?, rsvp_pending=?,
-		updated_at=?, deleted_at=?
+		updated_at=?, deleted_at=?, failures=?, next_attempt_at=?, last_error=?
 		WHERE id=? AND state IN (`+ph+`)`, args...)
 	if err != nil {
 		return wrapErr("update mapping", err)

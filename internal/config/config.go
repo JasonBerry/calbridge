@@ -102,9 +102,10 @@ func Default() Config {
 		},
 		ICloud: ICloud{ // #nosec G101 -- file paths, not credentials
 			AppPasswordFile: "/etc/calbridge/icloud-app-password",
+			ScheduleAgent:   "NONE", // P0-4: variant C
 			DeleteMode:      "plain",
 			SyncMethod:      "auto",
-			EmitVTimezone:   true,
+			EmitVTimezone:   false, // P0-8: iCloud inserts its own VTIMEZONE
 			RateLimitRPS:    5,
 		},
 		Sync: Sync{

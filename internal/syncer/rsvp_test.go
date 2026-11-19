@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	calendar "google.golang.org/api/calendar/v3"
 
@@ -193,6 +194,7 @@ func TestRSVPPushRetriedAfterFailure(t *testing.T) {
 	if m := h.mapping("a"); m.RSVPPending != "accepted" {
 		t.Fatalf("pending %q", m.RSVPPending)
 	}
+	h.clock.t = h.clock.t.Add(2 * time.Minute)
 	h.cycleTwice()
 	if len(h.g.Patches) != 1 || h.mapping("a").RSVPPending != "" {
 		t.Fatalf("patches %+v mapping %+v", h.g.Patches, h.mapping("a"))
@@ -285,5 +287,20 @@ func TestDryRunRSVP(t *testing.T) {
 	h.cycleTwice()
 	if len(h.g.Patches) != 1 {
 		t.Fatalf("patches %+v", h.g.Patches)
+	}
+}
+
+// TestDryRunFirstCycle: on a fresh database the dry run plans the creates
+// and does not mistake its own pretend writes for user deletions.
+func TestDryRunFirstCycle(t *testing.T) {
+	h := newHarness(t)
+	h.g.Put(invite("a"))
+	h.e.DryRun = true
+	rep := h.cycle()
+	if rep.Created != 1 || rep.UserDeleted != 0 || len(rep.Ops) != 1 || len(h.c.Hrefs()) != 0 {
+		t.Fatalf("report %+v", rep)
+	}
+	if ms, _ := h.s.ListMappings(context.Background()); len(ms) != 0 {
+		t.Fatalf("dry run left %d mappings", len(ms))
 	}
 }

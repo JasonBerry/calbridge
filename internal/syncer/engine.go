@@ -117,6 +117,7 @@ type Report struct {
 	Created, Updated, Adopted, Deleted, Unchanged, Skipped, UserDeleted, Failed int
 	RSVPs                                                                       int // responses sent to Google
 	FullResync                                                                  bool
+	ErrorClass                                                                  string // of the cycle's error, if any
 	Ops                                                                         []PlannedOp
 	Errors                                                                      []error
 }
@@ -169,6 +170,9 @@ type run struct {
 	rep *Report
 	log *slog.Logger
 	now time.Time
+	// soft collects failures whose work is durably queued: they are
+	// reported but do not hold back the sync tokens.
+	soft []error
 	// touched lists series whose Google side changed because of a push in
 	// this cycle (a per-occurrence RSVP creates an exception).
 	touched map[string]bool
@@ -192,9 +196,17 @@ func (e *Engine) newRun(q *store.Queries) *run {
 func (r *run) cycle(ctx context.Context) error {
 	// §8.1: Google first, so the iCloud pass sees the ETags of our own PUTs
 	// and skips them (loop prevention, §7.10).
-	err := errors.Join(r.retryPending(ctx), r.googleToICloud(ctx), r.iCloudToGoogle(ctx))
+	err := r.retryPending(ctx)
+	if !IsAuth(err) && ctx.Err() == nil {
+		err = errors.Join(err, r.googleToICloud(ctx))
+	}
+	if !IsAuth(err) && ctx.Err() == nil {
+		err = errors.Join(err, r.iCloudToGoogle(ctx))
+	}
+	err = errors.Join(append([]error{err}, r.soft...)...)
 	if err != nil {
 		r.rep.Errors = append(r.rep.Errors, err)
+		r.rep.ErrorClass = ErrorClass(err)
 	}
 	return err
 }
@@ -212,12 +224,30 @@ func (r *run) logOp(ctx context.Context, op string, m *store.Mapping) {
 // dryCalDAV records writes instead of sending them; reads pass through.
 type dryCalDAV struct {
 	icloud.CalDAV
-	n int
+	n       int
+	written map[string]bool // hrefs "written" in this dry run
 }
 
-func (d *dryCalDAV) Put(context.Context, string, *ical.Calendar, icloud.PutCond) (string, error) {
+func (d *dryCalDAV) Put(_ context.Context, href string, _ *ical.Calendar, _ icloud.PutCond) (string, error) {
 	d.n++
+	if d.written == nil {
+		d.written = map[string]bool{}
+	}
+	d.written[href] = true
 	return fmt.Sprintf(`"dry-run-%d"`, d.n), nil
 }
 
-func (d *dryCalDAV) Delete(context.Context, string, icloud.DeleteOpts) error { return nil }
+func (d *dryCalDAV) Delete(_ context.Context, href string, _ icloud.DeleteOpts) error {
+	if d.written == nil {
+		d.written = map[string]bool{}
+	}
+	d.written[href] = true
+	return nil
+}
+
+// dryWritten reports whether href was only pretend-written in this dry run:
+// the real iCloud does not reflect it, so the iCloud pass must ignore it.
+func (r *run) dryWritten(href string) bool {
+	d, ok := r.c.(*dryCalDAV)
+	return ok && d.written[href]
+}

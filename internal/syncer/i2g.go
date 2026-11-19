@@ -47,7 +47,7 @@ func (r *run) iCloudToGoogle(ctx context.Context) error {
 			return err
 		}
 		// Only live mirrors, and only ETags we did not write (§7.10).
-		if m.State != store.StateSynced || icloud.NormalizeETag(mem.ETag) == icloud.NormalizeETag(m.ICloudETag) {
+		if m.State != store.StateSynced || icloud.NormalizeETag(mem.ETag) == icloud.NormalizeETag(m.ICloudETag) || r.dryWritten(mem.Href) {
 			continue
 		}
 		mm := m
@@ -62,7 +62,19 @@ func (r *run) iCloudToGoogle(ctx context.Context) error {
 			return fmt.Errorf("icloud multiget: %w", err)
 		}
 		for i := range objs {
-			if err := r.handleICloudChange(ctx, byHref[objs[i].Href], &objs[i]); err != nil {
+			m := byHref[objs[i].Href]
+			err := r.item(ctx, func(ictx context.Context) error { return r.handleICloudChange(ictx, m, &objs[i]) })
+			switch {
+			case err == nil:
+			case ctx.Err() != nil:
+				return ctx.Err()
+			case IsAuth(err):
+				return err
+			case m != nil && r.recordFailure(ctx, m.GoogleEventID, err):
+				r.rep.Failed++
+				r.soft = append(r.soft, fmt.Errorf("rsvp %s (queued for retry): %w", m.GoogleEventID, err))
+			default:
+				r.rep.Failed++
 				errs = append(errs, err)
 			}
 		}
@@ -91,7 +103,7 @@ func (r *run) iCloudToGoogle(ctx context.Context) error {
 		}
 		// Rows we deleted are already deleted/pending_delete; only a live
 		// mirror vanishing means the user deleted it.
-		if m.State == store.StateSynced {
+		if m.State == store.StateSynced && !r.dryWritten(href) {
 			if err := r.markUserDeleted(ctx, &m); err != nil {
 				errs = append(errs, err)
 			}
@@ -105,8 +117,16 @@ func (r *run) iCloudToGoogle(ctx context.Context) error {
 	sort.Strings(touchedIDs)
 	for _, sid := range touchedIDs {
 		delete(r.touched, sid)
-		if err := r.processSeries(ctx, sid, 0); err != nil {
-			errs = append(errs, err)
+		if err := r.item(ctx, func(ictx context.Context) error { return r.processSeries(ictx, sid, 0) }); err != nil {
+			if IsAuth(err) || ctx.Err() != nil {
+				return errors.Join(err, ctx.Err())
+			}
+			r.rep.Failed++
+			if r.recordFailure(ctx, sid, err) {
+				r.soft = append(r.soft, err)
+			} else {
+				errs = append(errs, err)
+			}
 		}
 	}
 	if len(errs) > 0 {

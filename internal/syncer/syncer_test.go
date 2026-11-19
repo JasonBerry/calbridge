@@ -404,9 +404,12 @@ func TestCrashAfterPutAdopts(t *testing.T) {
 	if m := h.mapping("a"); m.State != store.StatePendingPut || m.ICloudETag != "" {
 		t.Fatalf("write-ahead row %+v", m)
 	}
-	if st, err := h.s.GetSyncState(context.Background(), "google:primary"); err == nil && st.Token != "" {
-		t.Fatal("sync token advanced after a failed series")
+	// The work is durably queued (pending_put), so the token may advance
+	// (§8.2) and retryPending re-drives it after its backoff.
+	if m := h.mapping("a"); m.Failures != 1 || m.NextAttemptAt.IsZero() {
+		t.Fatalf("failure not recorded: %+v", m)
 	}
+	h.clock.t = h.clock.t.Add(2 * time.Minute)
 	rep := h.cycleTwice()
 	if rep.Adopted != 1 || len(h.c.Hrefs()) != 1 || h.mapping("a").State != store.StateSynced {
 		t.Fatalf("report %+v hrefs %v", rep, h.c.Hrefs())
@@ -421,6 +424,7 @@ func TestPutFailureRetriedNextCycle(t *testing.T) {
 	if err == nil || rep.Failed == 0 {
 		t.Fatalf("failure not reported: %+v %v", rep, err)
 	}
+	h.clock.t = h.clock.t.Add(2 * time.Minute)
 	if rep := h.cycleTwice(); rep.Created != 1 {
 		t.Fatalf("report %+v", rep)
 	}
@@ -737,6 +741,7 @@ func TestFailedDeleteRetriedNextCycle(t *testing.T) {
 	if m := h.mapping("a"); m.State != store.StatePendingDelete {
 		t.Fatalf("state %s; want pending_delete", m.State)
 	}
+	h.clock.t = h.clock.t.Add(2 * time.Minute)
 	if rep := h.cycleTwice(); rep.Deleted != 1 || h.c.Object(hrefFor("a")) != nil {
 		t.Fatalf("report %+v", rep)
 	}

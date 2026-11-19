@@ -301,7 +301,6 @@ func (r *run) pushInstance(ctx context.Context, m *store.Mapping, key, googleID,
 		row.RSVPPending = ""
 		return "", r.q.PutInstanceState(ctx, row)
 	case err != nil:
-		r.rep.Failed++
 		return "", fmt.Errorf("rsvp %s: %w", id, err)
 	}
 	g := status
@@ -351,7 +350,6 @@ func (r *run) pushRSVP(ctx context.Context, m *store.Mapping, status string) err
 		m.RSVPPending = ""
 		return r.q.UpdateMapping(ctx, m)
 	case err != nil:
-		r.rep.Failed++
 		return fmt.Errorf("rsvp %s: %w", m.GoogleEventID, err)
 	}
 	g := status
@@ -359,6 +357,7 @@ func (r *run) pushRSVP(ctx context.Context, m *store.Mapping, status string) err
 		g = self.ResponseStatus
 	}
 	m.GoogleStatus, m.AgreedStatus, m.RSVPPending = g, g, ""
+	clearFailures(m)
 	r.rep.RSVPs++
 	r.rep.Ops = append(r.rep.Ops, PlannedOp{Op: "patch_rsvp", GoogleID: m.GoogleEventID, Href: m.ICloudHref})
 	r.log.DebugContext(ctx, "remote write", "op", "patch_rsvp", "google_id", m.GoogleEventID, "status", g)

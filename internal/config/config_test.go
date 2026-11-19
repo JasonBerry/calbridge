@@ -43,7 +43,7 @@ func TestDefaultsApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Google.CalendarID != "primary" || cfg.Google.Scope != ScopeEvents || cfg.Sync.Privacy != "full" ||
-		!cfg.ICloud.EmitVTimezone || !cfg.Sync.PushGoogleRSVPToICloud || cfg.Sync.Declined != "keep" {
+		cfg.ICloud.EmitVTimezone || !cfg.Sync.PushGoogleRSVPToICloud || cfg.Sync.Declined != "keep" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 }
@@ -51,7 +51,7 @@ func TestDefaultsApplied(t *testing.T) {
 func TestEnvOverrides(t *testing.T) {
 	env := []string{
 		"CALBRIDGE_SYNC_INTERVAL=45s",
-		"CALBRIDGE_ICLOUD_EMIT_VTIMEZONE=false",
+		"CALBRIDGE_ICLOUD_EMIT_VTIMEZONE=true",
 		"CALBRIDGE_ICLOUD_RATE_LIMIT_RPS=2.5",
 		"CALBRIDGE_SYNC_ALARMS=10m, 1h",
 		"CALBRIDGE_GOOGLE_SEND_UPDATES=none",
@@ -64,7 +64,7 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.Sync.Interval.D() != 45*time.Second {
 		t.Errorf("interval = %s", cfg.Sync.Interval.D())
 	}
-	if cfg.ICloud.EmitVTimezone {
+	if !cfg.ICloud.EmitVTimezone {
 		t.Error("emit_vtimezone not overridden")
 	}
 	if cfg.ICloud.RateLimitRPS != 2.5 {

@@ -29,10 +29,10 @@ func commands() []command {
 	return []command{
 		{name: "version", summary: "print the version", run: runVersion},
 		{name: "auth", summary: "authorize the Google account (interactive, loopback OAuth)", run: runAuth},
-		{name: "serve", summary: "run the sync loop (not implemented yet: M11)", run: notImplemented("M11")},
-		{name: "once", summary: "run one sync cycle (not implemented yet: M11)", run: notImplemented("M11")},
-		{name: "status", summary: "show sync status (not implemented yet: M11)", run: notImplemented("M11")},
-		{name: "calendars", summary: "list iCloud calendars (not implemented yet: M11; use 'spike caldav-discover')", run: notImplemented("M11")},
+		{name: "serve", summary: "run the sync loop and the status server", run: runServe},
+		{name: "once", summary: "run one sync cycle (--dry-run: plan only)", run: runOnce},
+		{name: "status", summary: "show sync status from the database", run: runStatus},
+		{name: "calendars", summary: "list iCloud calendars and their hrefs", run: runCalendars},
 		{name: "reconcile", summary: "rebuild mappings (not implemented yet: M12)", run: notImplemented("M12")},
 		{name: "spike", summary: "Phase 0 experiments", hidden: true, run: runSpike},
 	}
@@ -63,6 +63,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 0
 		case errors.Is(err, errUsage):
 			return 2
+		case errors.Is(err, errLocked):
+			_, _ = fmt.Fprintf(stderr, "calbridge %s: %v\n", c.name, err)
+			return exitLocked
 		default:
 			_, _ = fmt.Fprintf(stderr, "calbridge %s: %v\n", c.name, err)
 			return 1
