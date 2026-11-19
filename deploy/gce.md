@@ -80,6 +80,9 @@ $SSH --command 'cat /etc/debian_version; systemctl is-enabled unattended-upgrade
 
 ## 4. Build and stage
 
+Either download a release binary (`calbridge-linux-amd64` and `SHA256SUMS` from the Releases page;
+check it with `shasum -a 256 -c`) or build one:
+
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags="-s -w -X main.version=$(git describe --always --dirty)" -o /tmp/stage/calbridge ./cmd/calbridge
@@ -181,11 +184,22 @@ $SSH --command 'curl -s 127.0.0.1:8089/status'                                  
 At `log.level: info`, individual writes are not logged (only start-up, backups, warnings and
 errors); `/status` and `calbridge status` show what each cycle did.
 
-**Upgrade calbridge:** build as in step 4, copy just the binary, then:
+**Upgrade calbridge** to a release (see the repository's Releases page). The VM downloads the
+binary itself and checks it against the release's `SHA256SUMS` before installing:
 
 ```sh
-$SSH --command 'sudo install -m 0755 -o root -g root ~/calbridge /usr/local/bin/calbridge && rm ~/calbridge && sudo systemctl restart calbridge && calbridge version'
+V=v1.0.0   # the release to install
+$SSH --command "set -euo pipefail; cd /tmp
+base=https://github.com/JasonBerry/calbridge/releases/download/$V
+curl -fsSLO \$base/calbridge-linux-amd64 && curl -fsSLO \$base/SHA256SUMS
+grep ' calbridge-linux-amd64\$' SHA256SUMS | sha256sum -c -
+sudo install -m 0755 -o root -g root calbridge-linux-amd64 /usr/local/bin/calbridge
+rm calbridge-linux-amd64 SHA256SUMS
+sudo systemctl restart calbridge; sleep 10; systemctl is-active calbridge; calbridge version"
 ```
+
+To roll back, run the same with the previous version. To run an unreleased build instead, build as
+in step 4 and install that binary the same way.
 
 **Rotate a secret:** copy the new file over IAP, `sudo install -m 0600 -o calbridge -g calbridge`
 it to the same path, `sudo systemctl restart calbridge`. A new Google token comes from running

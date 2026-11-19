@@ -14,6 +14,9 @@ Status: **milestones M0–M14 done.** The live trial on a test calendar passed
 
 ## Build
 
+Prebuilt static binaries for Linux (amd64, arm64) and macOS (arm64, amd64), with SHA-256 checksums,
+are on the [Releases](https://github.com/JasonBerry/calbridge/releases) page. To build from source:
+
 ```sh
 make check   # build + vet + test + golangci-lint
 make bin     # static binary in bin/calbridge
