@@ -123,9 +123,9 @@ func (r *run) cacheEvent(ctx context.Context, ev *calendar.Event) error {
 }
 
 // retryPending re-drives write-ahead intents left by a failed or crashed
-// cycle (§8.6).
+// cycle (§8.6): pending PUTs and DELETEs, and RSVPs not yet sent to Google.
 func (r *run) retryPending(ctx context.Context) error {
-	ms, err := r.q.ListMappings(ctx, store.StatePendingPut, store.StatePendingDelete)
+	ms, err := r.q.ListMappings(ctx, store.StatePendingPut, store.StatePendingDelete, store.StateSynced)
 	if err != nil {
 		return err
 	}
@@ -135,10 +135,15 @@ func (r *run) retryPending(ctx context.Context) error {
 		if m.GoogleCalendarID != r.opts().GoogleCalendarID {
 			continue
 		}
-		if m.State == store.StatePendingDelete {
+		switch {
+		case m.State == store.StatePendingDelete:
 			err = r.deleteMirror(ctx, &m)
-		} else {
+		case m.State == store.StatePendingPut:
 			err = r.processSeries(ctx, m.GoogleEventID, 0)
+		case m.RSVPPending != "":
+			err = r.pushRSVP(ctx, &m, m.RSVPPending)
+		default:
+			continue
 		}
 		if err != nil {
 			r.rep.Failed++
@@ -230,6 +235,11 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 	if reason := r.skipReason(master, exceptions); reason != "" {
 		return r.markSkipped(ctx, m, master, reason)
 	}
+	g := translate.SelfAttendee(master).ResponseStatus
+	if r.opts().DeclinedDelete && g == "declined" &&
+		(m == nil || (m.State == store.StateDeleted && m.SkipReason == SkipDeclined)) {
+		return nil // hidden while declined (sync.declined: delete)
+	}
 	if m != nil && m.State == store.StateUserDeleted {
 		// §8.5: never recreated, unless the organizer reschedules and the
 		// user opted in.
@@ -257,13 +267,21 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 		}
 	}
 
-	rendered, hash, partstat, err := r.render(master, uid, m, prev)
+	plan := r.planRSVP(ctx, m, master, prev)
+	rendered, hash, err := r.render(master, uid, m, prev, plan)
 	if err != nil {
 		return r.markSkipped(ctx, m, master, skipRenderPfx+err.Error())
 	}
 	if m != nil && m.State == store.StateSynced && m.ContentHash == hash {
 		r.rep.Unchanged++
-		return nil
+		m.GoogleStatus, m.AgreedStatus = plan.google, plan.agreed
+		if prev != nil {
+			m.ICloudETag = prev.ETag
+		}
+		if err := r.q.UpdateMapping(ctx, m); err != nil {
+			return err
+		}
+		return r.maybeHideDeclined(ctx, m)
 	}
 
 	// Write-ahead intent (§8.6): the row is pending_put before the PUT.
@@ -281,7 +299,7 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 			return err
 		}
 	}
-	return r.putMirror(ctx, m, master, rendered, prev, hash, partstat, attempt)
+	return r.putMirror(ctx, m, master, rendered, prev, hash, plan, attempt)
 }
 
 // identity returns the UID and href for a series: the mapping's for an
@@ -324,25 +342,22 @@ func (r *run) renderOptions(uid string, m *store.Mapping) translate.RenderOption
 
 // render builds the mirror and its idempotency hash. The hash covers the
 // rendered content (minus volatile and Apple-owned parts) plus the PARTSTAT
-// we render for the user, which ContentHash leaves out.
-func (r *run) render(ev *calendar.Event, uid string, m *store.Mapping, prev *icloud.Object) (*ical.Calendar, string, translate.PartStat, error) {
+// rendered for the user (chosen by planRSVP), which ContentHash leaves out.
+func (r *run) render(ev *calendar.Event, uid string, m *store.Mapping, prev *icloud.Object, plan rsvpPlan) (*ical.Calendar, string, error) {
 	var prevCal *ical.Calendar
 	if prev != nil {
 		prevCal = prev.Cal
 	}
-	// M8 decides which PARTSTAT to render when Apple and Google disagree;
-	// until then Google's responseStatus is rendered (§7.4).
-	cal, err := translate.RenderSeries(ev, nil, translate.RSVPView{}, prevCal, r.renderOptions(uid, m))
+	cal, err := translate.RenderSeries(ev, nil, translate.RSVPView{Master: plan.render}, prevCal, r.renderOptions(uid, m))
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
-	partstat := translate.GoogleToPartStat(translate.SelfAttendee(ev).ResponseStatus)
-	return cal, translate.ContentHash(cal, r.opts().SelfEmail) + "|" + string(partstat), partstat, nil
+	return cal, translate.ContentHash(cal, r.opts().SelfEmail) + "|" + string(plan.render), nil
 }
 
 // putMirror is §8.2 putMirror.
 func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Event, cal *ical.Calendar,
-	prev *icloud.Object, hash string, partstat translate.PartStat, attempt int) error {
+	prev *icloud.Object, hash string, plan rsvpPlan, attempt int) error {
 	op := "put_update"
 	cond := icloud.PutCond{IfNoneMatchAny: true}
 	if prev != nil {
@@ -381,10 +396,10 @@ func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Even
 		r.rep.Updated++
 	}
 	r.logOp(ctx, op, m)
-	return r.markSynced(ctx, m, ev, etag, hash, partstat)
+	return r.markSynced(ctx, m, ev, etag, hash, plan)
 }
 
-func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Event, etag, hash string, partstat translate.PartStat) error {
+func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Event, etag, hash string, plan rsvpPlan) error {
 	m.State, m.ICloudETag, m.ContentHash, m.SkipReason = store.StateSynced, etag, hash, ""
 	m.DeletedAt = time.Time{}
 	if ev.Sequence > m.Sequence {
@@ -394,9 +409,11 @@ func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Eve
 	if t, err := time.Parse(time.RFC3339Nano, ev.Updated); err == nil {
 		m.LastGoogleUpdated = t
 	}
-	g := translate.SelfAttendee(ev).ResponseStatus
-	m.GoogleStatus, m.ICloudPartStat, m.AgreedStatus = g, string(partstat), g
-	return r.q.UpdateMapping(ctx, m)
+	m.GoogleStatus, m.ICloudPartStat, m.AgreedStatus = plan.google, string(plan.render), plan.agreed
+	if err := r.q.UpdateMapping(ctx, m); err != nil {
+		return err
+	}
+	return r.maybeHideDeclined(ctx, m)
 }
 
 // adopt takes over an object already at our deterministic href (§8.6).
@@ -429,7 +446,8 @@ func (r *run) adoptByUID(ctx context.Context, m *store.Mapping, ev *calendar.Eve
 // overwrite replaces obj with our rendering (keeping its alarms/Apple props)
 // and marks the mapping synced.
 func (r *run) overwrite(ctx context.Context, m *store.Mapping, ev *calendar.Event, obj *icloud.Object) error {
-	cal, hash, partstat, err := r.render(ev, m.ICalUID, m, obj)
+	plan := r.planRSVP(ctx, m, ev, obj)
+	cal, hash, err := r.render(ev, m.ICalUID, m, obj, plan)
 	if err != nil {
 		return r.markSkipped(ctx, m, ev, skipRenderPfx+err.Error())
 	}
@@ -446,7 +464,7 @@ func (r *run) overwrite(ctx context.Context, m *store.Mapping, ev *calendar.Even
 	}
 	r.rep.Adopted++
 	r.logOp(ctx, "adopt", m)
-	return r.markSynced(ctx, m, ev, etag, hash, partstat)
+	return r.markSynced(ctx, m, ev, etag, hash, plan)
 }
 
 // ownedBy reports whether cal is the mirror for uid/googleID: same UID, and

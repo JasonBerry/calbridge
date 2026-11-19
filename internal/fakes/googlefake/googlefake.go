@@ -32,8 +32,10 @@ type Fake struct {
 
 	// Call counters.
 	ListCalls, GetCalls, PatchCalls int
-	// Patches records SetSelfResponse calls.
+	// Patches records successful SetSelfResponse calls.
 	Patches []Patch
+	// FailNextPatch makes the next SetSelfResponse fail with this error.
+	FailNextPatch error
 }
 
 // Patch is one recorded SetSelfResponse call.
@@ -244,6 +246,10 @@ func (f *Fake) SetSelfResponse(_ context.Context, _ string, eventID, status, sen
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.PatchCalls++
+	if err := f.FailNextPatch; err != nil {
+		f.FailNextPatch = nil
+		return nil, err
+	}
 	ev, ok := f.events[eventID]
 	if !ok {
 		return nil, googlecal.ErrNotFound

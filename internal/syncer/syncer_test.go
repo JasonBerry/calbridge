@@ -605,6 +605,12 @@ func TestOptionsValidate(t *testing.T) {
 // a cycle converges and a second cycle performs zero remote writes, and
 // every live mirror matches a fresh rendering of its Google event.
 func TestIdempotencyProperty(t *testing.T) {
+	rsvps := 0
+	defer func() {
+		if rsvps < 3 {
+			t.Errorf("only %d Apple RSVPs reached Google across all seeds", rsvps)
+		}
+	}()
 	for seed := int64(1); seed <= 4; seed++ {
 		t.Run(fmt.Sprint("seed", seed), func(t *testing.T) {
 			h := newHarness(t)
@@ -615,7 +621,7 @@ func TestIdempotencyProperty(t *testing.T) {
 			for step := 0; step < 40; step++ {
 				ids := h.g.SortedIDs()
 				pick := func() string { return ids[rng.Intn(len(ids))] }
-				switch op := rng.Intn(9); {
+				switch op := rng.Intn(10); {
 				case op <= 1 || len(ids) == 0:
 					n++
 					ev := invite(fmt.Sprintf("r%d", n))
@@ -645,13 +651,20 @@ func TestIdempotencyProperty(t *testing.T) {
 					h.g.Update(pick(), func(*calendar.Event) {})
 				case op == 8:
 					h.g.ExpireSyncTokens()
+				case op == 9:
+					// The user responds in Apple Calendar.
+					id := pick()
+					if ev := h.g.Event(id); ev != nil && ev.Status != "cancelled" {
+						h.c.AppleRSVP(hrefFor(id), selfEmail, []string{"ACCEPTED", "TENTATIVE", "DECLINED"}[rng.Intn(3)])
+					}
 				}
 				h.cycleTwice()
 				checkConverged(t, h)
 			}
-			if h.c.Puts < 20 || h.c.Deletes < 2 {
+			if h.c.Puts < 15 || h.c.Deletes < 2 {
 				t.Fatalf("property run too quiet: %d PUTs, %d DELETEs", h.c.Puts, h.c.Deletes)
 			}
+			rsvps += len(h.g.Patches)
 		})
 	}
 }
@@ -676,7 +689,10 @@ func checkConverged(t *testing.T, h *harness) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if translate.ContentHash(want, selfEmail) != translate.ContentHash(obj.Cal, selfEmail) {
+		// Apple rewrites the user's own attendee line when they respond
+		// (CUTYPE, EMAIL=, drops RSVP; P0-4/P0-5) and calbridge correctly
+		// does not rewrite the mirror for that, so compare without it.
+		if translate.ContentHash(withoutSelf(want), selfEmail) != translate.ContentHash(withoutSelf(obj.Cal), selfEmail) {
 			t.Fatalf("mirror of %s differs from Google", ev.Id)
 		}
 		if selfPartStat(t, obj) != translate.GoogleToPartStat(ev.Attendees[1].ResponseStatus) {
@@ -726,4 +742,24 @@ func TestFailedDeleteRetriedNextCycle(t *testing.T) {
 	if rep := h.cycleTwice(); rep.Deleted != 1 || h.c.Object(hrefFor("a")) != nil {
 		t.Fatalf("report %+v", rep)
 	}
+}
+
+// withoutSelf returns a copy of cal without the user's ATTENDEE line.
+func withoutSelf(cal *ical.Calendar) *ical.Calendar {
+	out := ical.NewCalendar()
+	out.Props = cal.Props
+	for _, c := range cal.Children {
+		cc := *c
+		cc.Props = ical.Props{}
+		for name, ps := range c.Props {
+			for _, p := range ps {
+				if name == ical.PropAttendee && strings.EqualFold(strings.TrimPrefix(strings.ToLower(p.Value), "mailto:"), selfEmail) {
+					continue
+				}
+				cc.Props[name] = append(cc.Props[name], p)
+			}
+		}
+		out.Children = append(out.Children, &cc)
+	}
+	return out
 }

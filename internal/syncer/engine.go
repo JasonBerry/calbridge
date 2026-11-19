@@ -52,6 +52,14 @@ type Options struct {
 	IncludeOrganizedByMe bool
 	DeleteMode           string
 	RecreateOnReschedule bool
+	// SendUpdates is Google's sendUpdates for RSVP patches (P0-2/P0-5: all).
+	SendUpdates string
+	// NoGoogleRSVPToICloud disables writing Google-side response changes to
+	// the mirror (sync.push_google_rsvp_to_icloud: false).
+	NoGoogleRSVPToICloud bool
+	// DeclinedDelete removes the mirror once the user has declined
+	// (sync.declined: delete).
+	DeclinedDelete bool
 	// MaxFullResyncDeletes caps how many mirrors one full resync may delete
 	// (CLAUDE.md rule 5: no bulk deletes). 0 means the default of 5.
 	MaxFullResyncDeletes int
@@ -68,6 +76,11 @@ func (o Options) Validate() error {
 	}
 	if !strings.Contains(o.SelfEmail, "@") {
 		bad = append(bad, "SelfEmail is not an address")
+	}
+	switch o.SendUpdates {
+	case "", "all", "externalOnly", "none":
+	default:
+		bad = append(bad, fmt.Sprintf("SendUpdates %q is not all|externalOnly|none", o.SendUpdates))
 	}
 	switch o.DeleteMode {
 	case "", DeleteModePlain, DeleteModeScheduleReplyF:
@@ -94,7 +107,7 @@ type Engine struct {
 // PlannedOp is one remote write a cycle made (or, in dry-run, would make).
 // It carries ids only, never event content (CLAUDE.md rule 6).
 type PlannedOp struct {
-	Op       string // put_create | put_update | adopt | delete
+	Op       string // put_create | put_update | adopt | delete | patch_rsvp
 	GoogleID string
 	Href     string
 }
@@ -102,6 +115,7 @@ type PlannedOp struct {
 // Report summarises a cycle.
 type Report struct {
 	Created, Updated, Adopted, Deleted, Unchanged, Skipped, UserDeleted, Failed int
+	RSVPs                                                                       int // responses sent to Google
 	FullResync                                                                  bool
 	Ops                                                                         []PlannedOp
 	Errors                                                                      []error
@@ -135,6 +149,7 @@ func (e *Engine) Cycle(ctx context.Context) (Report, error) {
 	err := e.S.Tx(ctx, func(tx *store.Tx) error {
 		r := e.newRun(&tx.Queries)
 		r.c = &dryCalDAV{CalDAV: e.C}
+		r.g = &dryGoogle{GoogleCalendar: e.G}
 		cycErr = r.cycle(ctx)
 		rep = *r.rep
 		return errRollback
@@ -172,7 +187,9 @@ func (e *Engine) newRun(q *store.Queries) *run {
 }
 
 func (r *run) cycle(ctx context.Context) error {
-	err := errors.Join(r.retryPending(ctx), r.googleToICloud(ctx))
+	// §8.1: Google first, so the iCloud pass sees the ETags of our own PUTs
+	// and skips them (loop prevention, §7.10).
+	err := errors.Join(r.retryPending(ctx), r.googleToICloud(ctx), r.iCloudToGoogle(ctx))
 	if err != nil {
 		r.rep.Errors = append(r.rep.Errors, err)
 	}

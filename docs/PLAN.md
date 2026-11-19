@@ -759,6 +759,8 @@ else:
     render PARTSTAT = current iCloud PARTSTAT (never clobber a pending Apple-side change)
 ```
 
+**Implementation note (M8, 2026-11-19):** the policy above is unchanged, but P0-5 showed Apple's `LAST-MODIFIED` is unreliable, so the iCloud change time is always "unknown" and a true conflict (both sides changed to different values since they last agreed) always goes to Apple. Apple's current PARTSTAT is read from the fresh GET in the Google→iCloud pass too, so an Apple response is pushed before our PUT changes the ETag. With no `agreed` yet (first sight, or adopting an object calbridge did not write), Google's value is the baseline and nothing is sent.
+
 This guarantees: a value only moves when it differs from `agreed`, so writing it to the other side and seeing it come back is a no-op (no ping-pong). If Phase 0 (P0-7) shows a service PUT changing PARTSTAT triggers an iCloud iMIP, the Google→iCloud PARTSTAT write is done only with the suppressing SCHEDULE-AGENT variant, or disabled via `sync.push_google_rsvp_to_icloud: false`.
 
 Declined handling (`sync.declined`): `keep` (default) → nothing special. `delete` → after `agreed == declined` for a non-recurring event, delete the mirror with the P0-9 delete mode and set state `deleted` with a flag `declined_hidden` (reuse `skip_reason='declined'`); recreate if Google status later changes away from declined.
