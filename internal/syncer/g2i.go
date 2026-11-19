@@ -1,0 +1,529 @@
+package syncer
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/emersion/go-ical"
+	calendar "google.golang.org/api/calendar/v3"
+
+	"github.com/JasonBerry/calbridge/internal/googlecal"
+	"github.com/JasonBerry/calbridge/internal/icloud"
+	"github.com/JasonBerry/calbridge/internal/store"
+	"github.com/JasonBerry/calbridge/internal/translate"
+)
+
+// Skip reasons stored in mappings.skip_reason.
+const (
+	SkipOrganizerSelf = "organizer_self"
+	SkipRecurring     = "recurring_unsupported" // until M9/M10
+	SkipHrefCollision = "href_collision"
+	skipEventTypePfx  = "event_type:"
+	skipRenderPfx     = "render_error:"
+)
+
+func googleKey(calID string) string { return "google:" + calID }
+
+// googleToICloud is §8.2: fetch changes, cache them, process each series,
+// and advance the sync token only when every series succeeded (a failure
+// re-fetches the same changes next cycle; processing is idempotent).
+func (r *run) googleToICloud(ctx context.Context) error {
+	cal := r.opts().GoogleCalendarID
+	st, err := r.q.GetSyncState(ctx, googleKey(cal))
+	if err != nil && !store.IsNotFound(err) {
+		return err
+	}
+	full := st.Token == ""
+	var (
+		items []*calendar.Event
+		token string
+	)
+	if !full {
+		items, token, err = googlecal.ListAll(ctx, r.g, googlecal.ListRequest{CalendarID: cal, SyncToken: st.Token})
+		if errors.Is(err, googlecal.ErrSyncTokenGone) {
+			r.log.WarnContext(ctx, "google sync token gone; full resync", "calendar", cal)
+			full = true
+		} else if err != nil {
+			return fmt.Errorf("google list: %w", err)
+		}
+	}
+	if full {
+		r.rep.FullResync = true
+		items, token, err = googlecal.ListAll(ctx, r.g, googlecal.ListRequest{CalendarID: cal, TimeMin: r.now.Add(-r.opts().Lookback)})
+		if err != nil {
+			return fmt.Errorf("google full list: %w", err)
+		}
+	}
+
+	var series []string
+	seen := map[string]bool{}
+	for _, it := range items {
+		if err := r.cacheEvent(ctx, it); err != nil {
+			return err
+		}
+		sid := seriesID(it)
+		if !seen[sid] {
+			seen[sid] = true
+			series = append(series, sid)
+		}
+	}
+	var errs []error
+	for _, sid := range series {
+		if err := r.processSeries(ctx, sid, 0); err != nil {
+			r.rep.Failed++
+			r.log.WarnContext(ctx, "series failed", "google_id", sid, "err", err)
+			errs = append(errs, fmt.Errorf("series %s: %w", sid, err))
+		}
+	}
+	if full {
+		if err := r.reconcileMissing(ctx, seen); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	st.Key, st.Token, st.LastSuccess = googleKey(cal), token, r.now
+	if full {
+		st.LastFullSync = r.now
+	}
+	return r.q.PutSyncState(ctx, &st)
+}
+
+func seriesID(ev *calendar.Event) string {
+	if ev.RecurringEventId != "" {
+		return ev.RecurringEventId
+	}
+	return ev.Id
+}
+
+func (r *run) cacheEvent(ctx context.Context, ev *calendar.Event) error {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	ge := &store.GoogleEvent{
+		CalendarID: r.opts().GoogleCalendarID, EventID: ev.Id, SeriesID: seriesID(ev),
+		ICalUID: ev.ICalUID, Status: ev.Status, ETag: ev.Etag, JSON: b,
+	}
+	if ev.OriginalStartTime != nil {
+		ge.OriginalStart = ev.OriginalStartTime.DateTime + ev.OriginalStartTime.Date
+	}
+	if t, err := time.Parse(time.RFC3339Nano, ev.Updated); err == nil {
+		ge.Updated = t
+	}
+	if ge.Status == "" {
+		ge.Status = "confirmed"
+	}
+	return r.q.PutGoogleEvent(ctx, ge)
+}
+
+// retryPending re-drives write-ahead intents left by a failed or crashed
+// cycle (§8.6).
+func (r *run) retryPending(ctx context.Context) error {
+	ms, err := r.q.ListMappings(ctx, store.StatePendingPut, store.StatePendingDelete)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for i := range ms {
+		m := ms[i]
+		if m.GoogleCalendarID != r.opts().GoogleCalendarID {
+			continue
+		}
+		if m.State == store.StatePendingDelete {
+			err = r.deleteMirror(ctx, &m)
+		} else {
+			err = r.processSeries(ctx, m.GoogleEventID, 0)
+		}
+		if err != nil {
+			r.rep.Failed++
+			errs = append(errs, fmt.Errorf("retry %s: %w", m.GoogleEventID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// loadSeries returns the cached master (nil if unknown) and the number of
+// cached exceptions.
+func (r *run) loadSeries(ctx context.Context, sid string) (*calendar.Event, int, error) {
+	items, err := r.q.ListSeries(ctx, r.opts().GoogleCalendarID, sid)
+	if err != nil {
+		return nil, 0, err
+	}
+	var master *calendar.Event
+	exceptions := 0
+	for _, it := range items {
+		if it.EventID != sid {
+			exceptions++ // any exception, cancelled or not, means a recurring series
+			continue
+		}
+		var ev calendar.Event
+		if err := json.Unmarshal(it.JSON, &ev); err != nil {
+			return nil, 0, fmt.Errorf("cached event %s: %w", sid, err)
+		}
+		master = &ev
+	}
+	return master, exceptions, nil
+}
+
+func (r *run) skipReason(ev *calendar.Event, exceptions int) string {
+	switch {
+	case len(ev.Recurrence) > 0 || exceptions > 0:
+		return SkipRecurring
+	case ev.Organizer != nil && ev.Organizer.Self && !r.opts().IncludeOrganizedByMe:
+		return SkipOrganizerSelf
+	case ev.EventType != "" && ev.EventType != "default":
+		return skipEventTypePfx + ev.EventType
+	}
+	return ""
+}
+
+func (r *run) mapping(ctx context.Context, sid string) (*store.Mapping, error) {
+	m, err := r.q.GetMappingByGoogleID(ctx, r.opts().GoogleCalendarID, sid)
+	if store.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// processSeries is §8.2 processSeries for one Google series id. attempt
+// counts 412 retries (one re-GET-and-merge per cycle).
+func (r *run) processSeries(ctx context.Context, sid string, attempt int) error {
+	cal := r.opts().GoogleCalendarID
+	master, exceptions, err := r.loadSeries(ctx, sid)
+	if err != nil {
+		return err
+	}
+	m, err := r.mapping(ctx, sid)
+	if err != nil {
+		return err
+	}
+	if master == nil {
+		if m == nil {
+			return nil // only exceptions cached so far (M9)
+		}
+		ev, err := r.g.Get(ctx, cal, sid)
+		switch {
+		case errors.Is(err, googlecal.ErrNotFound):
+			ev = &calendar.Event{Id: sid, Status: "cancelled"}
+		case err != nil:
+			return err
+		default:
+			if err := r.cacheEvent(ctx, ev); err != nil {
+				return err
+			}
+		}
+		master = ev
+	}
+
+	if master.Status == "cancelled" || translate.SelfAttendee(master) == nil {
+		return r.goneFromGoogle(ctx, m)
+	}
+	if reason := r.skipReason(master, exceptions); reason != "" {
+		return r.markSkipped(ctx, m, master, reason)
+	}
+	if m != nil && m.State == store.StateUserDeleted {
+		// §8.5: never recreated, unless the organizer reschedules and the
+		// user opted in.
+		if !r.opts().RecreateOnReschedule || master.Sequence <= m.Sequence {
+			return nil
+		}
+		r.log.InfoContext(ctx, "recreating user-deleted mirror after reschedule", "google_id", sid)
+	}
+
+	uid, href, err := r.identity(ctx, m, master)
+	if err != nil {
+		return err
+	}
+
+	var prev *icloud.Object
+	if m != nil && m.ICloudETag != "" && m.State != store.StateUserDeleted && m.State != store.StateDeleted {
+		prev, err = r.c.Get(ctx, href)
+		if errors.Is(err, icloud.ErrNotFound) {
+			// The mirror was ours and is gone, and we did not delete it:
+			// the user deleted it in Apple Calendar (§8.5).
+			return r.markUserDeleted(ctx, m)
+		}
+		if err != nil {
+			return fmt.Errorf("get %s: %w", href, err)
+		}
+	}
+
+	rendered, hash, partstat, err := r.render(master, uid, m, prev)
+	if err != nil {
+		return r.markSkipped(ctx, m, master, skipRenderPfx+err.Error())
+	}
+	if m != nil && m.State == store.StateSynced && m.ContentHash == hash {
+		r.rep.Unchanged++
+		return nil
+	}
+
+	// Write-ahead intent (§8.6): the row is pending_put before the PUT.
+	if m == nil {
+		m = &store.Mapping{
+			GoogleCalendarID: cal, GoogleEventID: sid, ICalUID: uid,
+			ICloudCalendar: r.opts().CalendarHref, ICloudHref: href, State: store.StatePendingPut,
+		}
+		if err := r.q.CreateMapping(ctx, m); err != nil {
+			return err
+		}
+	} else {
+		m.State, m.ICalUID, m.ICloudHref, m.SkipReason = store.StatePendingPut, uid, href, ""
+		if err := r.q.UpdateMapping(ctx, m); err != nil {
+			return err
+		}
+	}
+	return r.putMirror(ctx, m, master, rendered, prev, hash, partstat, attempt)
+}
+
+// identity returns the UID and href for a series: the mapping's for an
+// existing row, else iCalUID with the §7.1 collision rule.
+func (r *run) identity(ctx context.Context, m *store.Mapping, ev *calendar.Event) (string, string, error) {
+	calHref := r.opts().CalendarHref
+	if m != nil {
+		return m.ICalUID, m.ICloudHref, nil
+	}
+	uid := ev.ICalUID
+	if uid == "" {
+		uid = ev.Id + "@google.com"
+	}
+	other, err := r.q.GetMappingByUID(ctx, calHref, uid)
+	switch {
+	case err == nil && other.GoogleEventID != ev.Id:
+		// §7.1: a different Google event with an iCalUID we already map
+		// (UNVERIFIED: whether Google reuses UIDs on "this and following").
+		domain := r.opts().SelfEmail[strings.LastIndex(r.opts().SelfEmail, "@")+1:]
+		uid = "calbridge-" + ev.Id + "@" + domain
+		r.log.WarnContext(ctx, "iCalUID already mapped to another event; using a calbridge UID", "google_id", ev.Id)
+	case err != nil && !store.IsNotFound(err):
+		return "", "", err
+	}
+	return uid, translate.ObjectHref(calHref, uid), nil
+}
+
+func (r *run) renderOptions(uid string, m *store.Mapping) translate.RenderOptions {
+	o := r.opts()
+	ro := translate.RenderOptions{
+		SelfEmail: o.SelfEmail, ScheduleAgent: o.ScheduleAgent, Privacy: o.Privacy, Attendees: o.Attendees,
+		DefaultAlarms: o.DefaultAlarms, EmitVTimezone: o.EmitVTimezone, Now: r.now,
+		GoogleCalendarID: o.GoogleCalendarID, UID: uid,
+	}
+	if m != nil {
+		ro.MinSequence = m.Sequence
+	}
+	return ro
+}
+
+// render builds the mirror and its idempotency hash. The hash covers the
+// rendered content (minus volatile and Apple-owned parts) plus the PARTSTAT
+// we render for the user, which ContentHash leaves out.
+func (r *run) render(ev *calendar.Event, uid string, m *store.Mapping, prev *icloud.Object) (*ical.Calendar, string, translate.PartStat, error) {
+	var prevCal *ical.Calendar
+	if prev != nil {
+		prevCal = prev.Cal
+	}
+	// M8 decides which PARTSTAT to render when Apple and Google disagree;
+	// until then Google's responseStatus is rendered (§7.4).
+	cal, err := translate.RenderSeries(ev, nil, translate.RSVPView{}, prevCal, r.renderOptions(uid, m))
+	if err != nil {
+		return nil, "", "", err
+	}
+	partstat := translate.GoogleToPartStat(translate.SelfAttendee(ev).ResponseStatus)
+	return cal, translate.ContentHash(cal, r.opts().SelfEmail) + "|" + string(partstat), partstat, nil
+}
+
+// putMirror is §8.2 putMirror.
+func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Event, cal *ical.Calendar,
+	prev *icloud.Object, hash string, partstat translate.PartStat, attempt int) error {
+	op := "put_update"
+	cond := icloud.PutCond{IfNoneMatchAny: true}
+	if prev != nil {
+		cond = icloud.PutCond{IfMatch: prev.ETag}
+	} else {
+		op = "put_create"
+	}
+	etag, err := r.c.Put(ctx, m.ICloudHref, cal, cond)
+	switch {
+	case err == nil:
+	case prev == nil && errors.Is(err, icloud.ErrPreconditionFailed):
+		// Exists already: a crash after an earlier PUT, or a leftover (§8.6).
+		return r.adopt(ctx, m, ev)
+	case prev == nil && errors.Is(err, icloud.ErrUIDConflict):
+		// UNVERIFIED (P0-4): iCloud reporting no-uid-conflict when the user
+		// imported the invitation's .ics into this calendar.
+		return r.adoptByUID(ctx, m, ev)
+	case prev != nil && errors.Is(err, icloud.ErrPreconditionFailed) && attempt == 0:
+		// Apple changed the object between our GET and PUT: re-GET (which
+		// carries the user's alarms over again) and retry once.
+		r.log.DebugContext(ctx, "412 on update; retrying with a fresh GET", "google_id", m.GoogleEventID)
+		return r.processSeries(ctx, m.GoogleEventID, attempt+1)
+	default:
+		return fmt.Errorf("put %s: %w", m.ICloudHref, err)
+	}
+	if etag == "" {
+		obj, err := r.c.Get(ctx, m.ICloudHref)
+		if err != nil {
+			return fmt.Errorf("get after put %s: %w", m.ICloudHref, err)
+		}
+		etag = obj.ETag
+	}
+	if prev == nil {
+		r.rep.Created++
+	} else {
+		r.rep.Updated++
+	}
+	r.logOp(ctx, op, m)
+	return r.markSynced(ctx, m, ev, etag, hash, partstat)
+}
+
+func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Event, etag, hash string, partstat translate.PartStat) error {
+	m.State, m.ICloudETag, m.ContentHash, m.SkipReason = store.StateSynced, etag, hash, ""
+	m.DeletedAt = time.Time{}
+	if ev.Sequence > m.Sequence {
+		m.Sequence = ev.Sequence
+	}
+	m.LastGoogleETag = ev.Etag
+	if t, err := time.Parse(time.RFC3339Nano, ev.Updated); err == nil {
+		m.LastGoogleUpdated = t
+	}
+	g := translate.SelfAttendee(ev).ResponseStatus
+	m.GoogleStatus, m.ICloudPartStat, m.AgreedStatus = g, string(partstat), g
+	return r.q.UpdateMapping(ctx, m)
+}
+
+// adopt takes over an object already at our deterministic href (§8.6).
+func (r *run) adopt(ctx context.Context, m *store.Mapping, ev *calendar.Event) error {
+	obj, err := r.c.Get(ctx, m.ICloudHref)
+	if err != nil {
+		return fmt.Errorf("adopt get %s: %w", m.ICloudHref, err)
+	}
+	if !ownedBy(obj.Cal, m.ICalUID, ev.Id) {
+		r.log.ErrorContext(ctx, "object at our href has a different UID; not touching it", "href", m.ICloudHref, "google_id", ev.Id)
+		return r.markSkipped(ctx, m, ev, SkipHrefCollision)
+	}
+	return r.overwrite(ctx, m, ev, obj)
+}
+
+// adoptByUID merges a copy of the event the user imported elsewhere in the
+// calendar into the mirror (§8.6).
+func (r *run) adoptByUID(ctx context.Context, m *store.Mapping, ev *calendar.Event) error {
+	obj, err := r.c.FindByUID(ctx, r.opts().CalendarHref, m.ICalUID)
+	if err != nil {
+		return fmt.Errorf("adopt by uid: %w", err)
+	}
+	m.ICloudHref = obj.Href
+	if err := r.q.UpdateMapping(ctx, m); err != nil {
+		return err
+	}
+	return r.overwrite(ctx, m, ev, obj)
+}
+
+// overwrite replaces obj with our rendering (keeping its alarms/Apple props)
+// and marks the mapping synced.
+func (r *run) overwrite(ctx context.Context, m *store.Mapping, ev *calendar.Event, obj *icloud.Object) error {
+	cal, hash, partstat, err := r.render(ev, m.ICalUID, m, obj)
+	if err != nil {
+		return r.markSkipped(ctx, m, ev, skipRenderPfx+err.Error())
+	}
+	etag, err := r.c.Put(ctx, obj.Href, cal, icloud.PutCond{IfMatch: obj.ETag})
+	if err != nil {
+		return fmt.Errorf("adopt put %s: %w", obj.Href, err)
+	}
+	if etag == "" {
+		got, err := r.c.Get(ctx, obj.Href)
+		if err != nil {
+			return err
+		}
+		etag = got.ETag
+	}
+	r.rep.Adopted++
+	r.logOp(ctx, "adopt", m)
+	return r.markSynced(ctx, m, ev, etag, hash, partstat)
+}
+
+// ownedBy reports whether cal is the mirror for uid/googleID: same UID, and
+// X-CALBRIDGE-GID (when present) naming the same Google event.
+func ownedBy(cal *ical.Calendar, uid, googleID string) bool {
+	if cal == nil {
+		return false
+	}
+	for _, c := range cal.Children {
+		if c.Name != ical.CompEvent {
+			continue
+		}
+		if p := c.Props.Get(ical.PropUID); p == nil || p.Value != uid {
+			return false
+		}
+		if p := c.Props.Get(translate.PropGoogleID); p != nil && p.Value != googleID {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (r *run) markSkipped(ctx context.Context, m *store.Mapping, ev *calendar.Event, reason string) error {
+	r.rep.Skipped++
+	if m == nil {
+		uid := ev.ICalUID
+		if uid == "" {
+			uid = ev.Id + "@google.com"
+		}
+		nm := &store.Mapping{
+			GoogleCalendarID: r.opts().GoogleCalendarID, GoogleEventID: ev.Id, ICalUID: uid,
+			ICloudCalendar: r.opts().CalendarHref, ICloudHref: translate.ObjectHref(r.opts().CalendarHref, uid),
+			State: store.StateSkipped, SkipReason: reason,
+		}
+		err := r.q.CreateMapping(ctx, nm)
+		if errors.Is(err, store.ErrConflict) {
+			return nil // UID or href already used by another row; nothing to record
+		}
+		return err
+	}
+	switch m.State {
+	case store.StateSkipped:
+		if m.SkipReason == reason {
+			return nil
+		}
+	case store.StateSynced, store.StatePendingPut:
+		// A live mirror whose event became filtered (e.g. turned recurring
+		// before M9) is left in place; only deleteMirror removes mirrors.
+		r.log.InfoContext(ctx, "mirror's event is now filtered; leaving it", "google_id", m.GoogleEventID, "reason", reason)
+		if m.State == store.StateSynced {
+			return nil
+		}
+	}
+	m.State, m.SkipReason = store.StateSkipped, reason
+	return r.q.UpdateMapping(ctx, m)
+}
+
+func (r *run) markUserDeleted(ctx context.Context, m *store.Mapping) error {
+	r.rep.UserDeleted++
+	r.log.InfoContext(ctx, "mirror deleted in Apple Calendar; not recreating", "google_id", m.GoogleEventID, "href", m.ICloudHref)
+	m.State = store.StateUserDeleted
+	return r.q.UpdateMapping(ctx, m)
+}
+
+// goneFromGoogle handles a cancelled event or one the user is no longer
+// invited to (§8.5).
+func (r *run) goneFromGoogle(ctx context.Context, m *store.Mapping) error {
+	if m == nil {
+		return nil // e.g. a tombstone for an event never seen (P0-1)
+	}
+	switch m.State {
+	case store.StateSynced, store.StatePendingPut, store.StatePendingDelete:
+		return r.deleteMirror(ctx, m)
+	case store.StateUserDeleted, store.StateSkipped:
+		m.State, m.DeletedAt = store.StateDeleted, r.now
+		return r.q.UpdateMapping(ctx, m)
+	}
+	return nil
+}

@@ -2,8 +2,6 @@ package spike
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -11,14 +9,12 @@ import (
 	"time"
 
 	calendar "google.golang.org/api/calendar/v3"
+
+	"github.com/JasonBerry/calbridge/internal/translate"
 )
 
-// objectHref mirrors PLAN.md §7.1: <calendar>/calbridge-<base32(sha256(uid))[:26]>.ics.
-func objectHref(calendarHref, uid string) string {
-	sum := sha256.Sum256([]byte(uid))
-	enc := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
-	return strings.TrimSuffix(calendarHref, "/") + "/calbridge-" + enc[:26] + ".ics"
-}
+// objectHref mirrors PLAN.md §7.1 (shared with the syncer).
+func objectHref(calendarHref, uid string) string { return translate.ObjectHref(calendarHref, uid) }
 
 func randomID() string {
 	b := make([]byte, 6)
