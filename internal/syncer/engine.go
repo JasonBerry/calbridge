@@ -169,6 +169,9 @@ type run struct {
 	rep *Report
 	log *slog.Logger
 	now time.Time
+	// touched lists series whose Google side changed because of a push in
+	// this cycle (a per-occurrence RSVP creates an exception).
+	touched map[string]bool
 }
 
 func (e *Engine) newRun(q *store.Queries) *run {
@@ -183,7 +186,7 @@ func (e *Engine) newRun(q *store.Queries) *run {
 	if e.DryRun {
 		log = log.With("dry_run", true)
 	}
-	return &run{e: e, q: q, c: e.C, g: e.G, rep: &Report{}, log: log, now: clock.Now().UTC()}
+	return &run{e: e, q: q, c: e.C, g: e.G, rep: &Report{}, log: log, now: clock.Now().UTC(), touched: map[string]bool{}}
 }
 
 func (r *run) cycle(ctx context.Context) error {

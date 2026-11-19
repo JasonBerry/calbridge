@@ -235,9 +235,73 @@ func (f *Fake) Get(_ context.Context, _ string, eventID string) (*calendar.Event
 	return clone(ev), nil
 }
 
-// InstanceAt implements GoogleCalendar (recurring support arrives in M10).
-func (f *Fake) InstanceAt(context.Context, string, string, time.Time) (*calendar.Event, error) {
-	return nil, googlecal.ErrNotFound
+// InstanceAt implements GoogleCalendar: the stored exception with that
+// original start, else a virtual instance of the master (not stored, like
+// events.instances). All-day series take originalStart's UTC date.
+func (f *Fake) InstanceAt(_ context.Context, _ string, masterID string, originalStart time.Time) (*calendar.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	master, ok := f.events[masterID]
+	if !ok || len(master.Recurrence) == 0 {
+		return nil, googlecal.ErrNotFound
+	}
+	id := masterID + "_" + instanceSuffix(master, originalStart)
+	if ev, ok := f.events[id]; ok {
+		return clone(ev), nil
+	}
+	return virtualInstance(master, id, originalStart), nil
+}
+
+func instanceSuffix(master *calendar.Event, at time.Time) string {
+	if master.Start != nil && master.Start.Date != "" {
+		return at.UTC().Format("20060102")
+	}
+	return at.UTC().Format("20060102T150405Z")
+}
+
+// virtualInstance is master as it occurs at originalStart.
+func virtualInstance(master *calendar.Event, id string, at time.Time) *calendar.Event {
+	c := clone(master)
+	c.Id, c.RecurringEventId, c.Recurrence = id, master.Id, nil
+	if master.Start.Date != "" {
+		ms, _ := time.Parse("2006-01-02", master.Start.Date)
+		me, _ := time.Parse("2006-01-02", master.End.Date)
+		d := at.UTC().Format("2006-01-02")
+		day, _ := time.Parse("2006-01-02", d)
+		c.OriginalStartTime = &calendar.EventDateTime{Date: d}
+		c.Start = &calendar.EventDateTime{Date: d}
+		c.End = &calendar.EventDateTime{Date: day.Add(me.Sub(ms)).Format("2006-01-02")}
+		return c
+	}
+	ms, _ := time.Parse(time.RFC3339, master.Start.DateTime)
+	me, _ := time.Parse(time.RFC3339, master.End.DateTime)
+	start := at.In(ms.Location())
+	c.OriginalStartTime = &calendar.EventDateTime{DateTime: start.Format(time.RFC3339), TimeZone: master.Start.TimeZone}
+	c.Start = &calendar.EventDateTime{DateTime: start.Format(time.RFC3339), TimeZone: master.Start.TimeZone}
+	c.End = &calendar.EventDateTime{DateTime: start.Add(me.Sub(ms)).Format(time.RFC3339), TimeZone: master.End.TimeZone}
+	return c
+}
+
+// PutInstance stores an exception of masterID at originalStart after fn
+// modifies the virtual instance (the organizer edits one occurrence).
+func (f *Fake) PutInstance(masterID string, originalStart time.Time, fn func(ev *calendar.Event)) string {
+	f.mu.Lock()
+	master, ok := f.events[masterID]
+	if !ok {
+		f.mu.Unlock()
+		panic("googlefake: no master " + masterID)
+	}
+	id := masterID + "_" + instanceSuffix(master, originalStart)
+	ev, exists := f.events[id]
+	if exists {
+		ev = clone(ev)
+	} else {
+		ev = virtualInstance(master, id, originalStart)
+	}
+	f.mu.Unlock()
+	fn(ev)
+	f.Put(ev)
+	return id
 }
 
 // SetSelfResponse implements GoogleCalendar: it changes the self attendee's
@@ -252,7 +316,11 @@ func (f *Fake) SetSelfResponse(_ context.Context, _ string, eventID, status, sen
 	}
 	ev, ok := f.events[eventID]
 	if !ok {
-		return nil, googlecal.ErrNotFound
+		// Responding to one occurrence materialises it as an exception.
+		ev = f.materialise(eventID)
+		if ev == nil {
+			return nil, googlecal.ErrNotFound
+		}
 	}
 	if !googlecal.ValidResponseStatus(status) {
 		return nil, googlecal.ErrBadStatus
@@ -265,6 +333,31 @@ func (f *Fake) SetSelfResponse(_ context.Context, _ string, eventID, status, sen
 	f.Patches = append(f.Patches, Patch{EventID: eventID, Status: status, SendUpdates: sendUpdates})
 	f.touch(ev)
 	return clone(ev), nil
+}
+
+// materialise creates the stored exception for instance id <master>_<suffix>.
+// Caller holds f.mu.
+func (f *Fake) materialise(id string) *calendar.Event {
+	i := strings.LastIndex(id, "_")
+	if i < 0 {
+		return nil
+	}
+	master, ok := f.events[id[:i]]
+	if !ok || len(master.Recurrence) == 0 {
+		return nil
+	}
+	suffix := id[i+1:]
+	at, err := time.Parse("20060102T150405Z", suffix)
+	if err != nil {
+		if at, err = time.Parse("20060102", suffix); err != nil {
+			return nil
+		}
+	}
+	ev := virtualInstance(master, id, at)
+	ev.ICalUID = master.ICalUID
+	f.events[id] = ev
+	f.order = append(f.order, id)
+	return ev
 }
 
 // SortedIDs returns the ids of non-cancelled events (test helper).

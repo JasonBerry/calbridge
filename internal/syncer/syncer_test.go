@@ -507,18 +507,16 @@ func TestFilteredEventsAreSkipped(t *testing.T) {
 	h := newHarness(t)
 	own := invite("own")
 	own.Organizer.Self = true
-	rec := invite("rec")
-	rec.Recurrence = []string{"RRULE:FREQ=WEEKLY"}
 	ooo := invite("ooo")
 	ooo.EventType = "outOfOffice"
-	for _, ev := range []*calendar.Event{own, rec, ooo} {
+	for _, ev := range []*calendar.Event{own, ooo} {
 		h.g.Put(ev)
 	}
 	rep := h.cycleTwice()
-	if rep.Writes() != 0 || rep.Skipped != 3 {
+	if rep.Writes() != 0 || rep.Skipped != 2 {
 		t.Fatalf("report %+v", rep)
 	}
-	for id, reason := range map[string]string{"own": SkipOrganizerSelf, "rec": SkipRecurring, "ooo": "event_type:outOfOffice"} {
+	for id, reason := range map[string]string{"own": SkipOrganizerSelf, "ooo": "event_type:outOfOffice"} {
 		if m := h.mapping(id); m.State != store.StateSkipped || m.SkipReason != reason {
 			t.Errorf("%s: %s %q", id, m.State, m.SkipReason)
 		}

@@ -20,7 +20,6 @@ import (
 // Skip reasons stored in mappings.skip_reason.
 const (
 	SkipOrganizerSelf = "organizer_self"
-	SkipRecurring     = "recurring_unsupported" // until M9/M10
 	SkipHrefCollision = "href_collision"
 	skipEventTypePfx  = "event_type:"
 	skipRenderPfx     = "render_error:"
@@ -94,9 +93,17 @@ func (r *run) googleToICloud(ctx context.Context) error {
 	return r.q.PutSyncState(ctx, &st)
 }
 
+// seriesID groups Google items by series (§7.8 rule 1). A bare cancelled
+// tombstone carries no recurringEventId (P0-1), so an instance-shaped id
+// (<master>_<date>) is attributed to its master.
 func seriesID(ev *calendar.Event) string {
 	if ev.RecurringEventId != "" {
 		return ev.RecurringEventId
+	}
+	if ev.Status == "cancelled" {
+		if i := strings.LastIndex(ev.Id, "_"); i > 0 && translate.InstanceSuffix(ev.Id[i+1:]) {
+			return ev.Id[:i]
+		}
 	}
 	return ev.Id
 }
@@ -143,7 +150,7 @@ func (r *run) retryPending(ctx context.Context) error {
 		case m.RSVPPending != "":
 			err = r.pushRSVP(ctx, &m, m.RSVPPending)
 		default:
-			continue
+			err = r.retryInstanceRSVPs(ctx, &m)
 		}
 		if err != nil {
 			r.rep.Failed++
@@ -153,33 +160,32 @@ func (r *run) retryPending(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// loadSeries returns the cached master (nil if unknown) and the number of
-// cached exceptions.
-func (r *run) loadSeries(ctx context.Context, sid string) (*calendar.Event, int, error) {
+// loadSeries returns the cached master (nil if unknown) and exceptions.
+func (r *run) loadSeries(ctx context.Context, sid string) (*calendar.Event, []*calendar.Event, error) {
 	items, err := r.q.ListSeries(ctx, r.opts().GoogleCalendarID, sid)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
-	var master *calendar.Event
-	exceptions := 0
+	var (
+		master     *calendar.Event
+		exceptions []*calendar.Event
+	)
 	for _, it := range items {
-		if it.EventID != sid {
-			exceptions++ // any exception, cancelled or not, means a recurring series
-			continue
-		}
 		var ev calendar.Event
 		if err := json.Unmarshal(it.JSON, &ev); err != nil {
-			return nil, 0, fmt.Errorf("cached event %s: %w", sid, err)
+			return nil, nil, fmt.Errorf("cached event %s: %w", it.EventID, err)
 		}
-		master = &ev
+		if it.EventID == sid {
+			master = &ev
+		} else {
+			exceptions = append(exceptions, &ev)
+		}
 	}
 	return master, exceptions, nil
 }
 
-func (r *run) skipReason(ev *calendar.Event, exceptions int) string {
+func (r *run) skipReason(ev *calendar.Event) string {
 	switch {
-	case len(ev.Recurrence) > 0 || exceptions > 0:
-		return SkipRecurring
 	case ev.Organizer != nil && ev.Organizer.Self && !r.opts().IncludeOrganizedByMe:
 		return SkipOrganizerSelf
 	case ev.EventType != "" && ev.EventType != "default":
@@ -212,9 +218,11 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 		return err
 	}
 	if master == nil {
-		if m == nil {
-			return nil // only exceptions cached so far (M9)
+		if m == nil && allCancelled(exceptions) {
+			return nil // e.g. tombstones of a series never mirrored
 		}
+		// §7.8 rule 8: an exception arrived without its master (paging
+		// order, or the master was never cached): fetch it once.
 		ev, err := r.g.Get(ctx, cal, sid)
 		switch {
 		case errors.Is(err, googlecal.ErrNotFound):
@@ -232,11 +240,11 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 	if master.Status == "cancelled" || translate.SelfAttendee(master) == nil {
 		return r.goneFromGoogle(ctx, m)
 	}
-	if reason := r.skipReason(master, exceptions); reason != "" {
+	if reason := r.skipReason(master); reason != "" {
 		return r.markSkipped(ctx, m, master, reason)
 	}
 	g := translate.SelfAttendee(master).ResponseStatus
-	if r.opts().DeclinedDelete && g == "declined" &&
+	if r.opts().DeclinedDelete && g == "declined" && len(master.Recurrence) == 0 &&
 		(m == nil || (m.State == store.StateDeleted && m.SkipReason == SkipDeclined)) {
 		return nil // hidden while declined (sync.declined: delete)
 	}
@@ -267,18 +275,24 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 		}
 	}
 
-	plan := r.planRSVP(ctx, m, master, prev)
-	rendered, hash, err := r.render(master, uid, m, prev, plan)
+	plan, err := r.planRSVP(ctx, m, master, exceptions, prev)
+	if err != nil {
+		return err
+	}
+	rendered, hash, err := r.render(master, exceptions, uid, m, prev, plan)
 	if err != nil {
 		return r.markSkipped(ctx, m, master, skipRenderPfx+err.Error())
 	}
-	if m != nil && m.State == store.StateSynced && m.ContentHash == hash {
+	if m != nil && m.State == store.StateSynced && m.ContentHash == hash && !r.rsvpDiffers(prev, plan) {
 		r.rep.Unchanged++
 		m.GoogleStatus, m.AgreedStatus = plan.google, plan.agreed
 		if prev != nil {
 			m.ICloudETag = prev.ETag
 		}
 		if err := r.q.UpdateMapping(ctx, m); err != nil {
+			return err
+		}
+		if err := r.saveInstances(ctx, m, plan); err != nil {
 			return err
 		}
 		return r.maybeHideDeclined(ctx, m)
@@ -299,7 +313,7 @@ func (r *run) processSeries(ctx context.Context, sid string, attempt int) error 
 			return err
 		}
 	}
-	return r.putMirror(ctx, m, master, rendered, prev, hash, plan, attempt)
+	return r.putMirror(ctx, m, master, exceptions, rendered, prev, hash, plan, attempt)
 }
 
 // identity returns the UID and href for a series: the mapping's for an
@@ -340,23 +354,32 @@ func (r *run) renderOptions(uid string, m *store.Mapping) translate.RenderOption
 	return ro
 }
 
-// render builds the mirror and its idempotency hash. The hash covers the
-// rendered content (minus volatile and Apple-owned parts) plus the PARTSTAT
-// rendered for the user (chosen by planRSVP), which ContentHash leaves out.
-func (r *run) render(ev *calendar.Event, uid string, m *store.Mapping, prev *icloud.Object, plan rsvpPlan) (*ical.Calendar, string, error) {
+// render builds the mirror and its content hash (rendered content minus
+// volatile and Apple-owned parts and the user's PARTSTATs, which are
+// compared against what Apple shows instead: rsvpDiffers).
+func (r *run) render(ev *calendar.Event, exceptions []*calendar.Event, uid string, m *store.Mapping, prev *icloud.Object, plan rsvpPlan) (*ical.Calendar, string, error) {
 	var prevCal *ical.Calendar
 	if prev != nil {
 		prevCal = prev.Cal
 	}
-	cal, err := translate.RenderSeries(ev, nil, translate.RSVPView{Master: plan.render}, prevCal, r.renderOptions(uid, m))
+	cal, err := translate.RenderSeries(ev, exceptions, plan.view(), prevCal, r.renderOptions(uid, m))
 	if err != nil {
 		return nil, "", err
 	}
-	return cal, translate.ContentHash(cal, r.opts().SelfEmail) + "|" + string(plan.render), nil
+	return cal, translate.ContentHash(cal, r.opts().SelfEmail), nil
+}
+
+func allCancelled(evs []*calendar.Event) bool {
+	for _, ev := range evs {
+		if ev.Status != "cancelled" {
+			return false
+		}
+	}
+	return true
 }
 
 // putMirror is §8.2 putMirror.
-func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Event, cal *ical.Calendar,
+func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Event, exceptions []*calendar.Event, cal *ical.Calendar,
 	prev *icloud.Object, hash string, plan rsvpPlan, attempt int) error {
 	op := "put_update"
 	cond := icloud.PutCond{IfNoneMatchAny: true}
@@ -370,11 +393,11 @@ func (r *run) putMirror(ctx context.Context, m *store.Mapping, ev *calendar.Even
 	case err == nil:
 	case prev == nil && errors.Is(err, icloud.ErrPreconditionFailed):
 		// Exists already: a crash after an earlier PUT, or a leftover (§8.6).
-		return r.adopt(ctx, m, ev)
+		return r.adopt(ctx, m, ev, exceptions)
 	case prev == nil && errors.Is(err, icloud.ErrUIDConflict):
 		// UNVERIFIED (P0-4): iCloud reporting no-uid-conflict when the user
 		// imported the invitation's .ics into this calendar.
-		return r.adoptByUID(ctx, m, ev)
+		return r.adoptByUID(ctx, m, ev, exceptions)
 	case prev != nil && errors.Is(err, icloud.ErrPreconditionFailed) && attempt == 0:
 		// Apple changed the object between our GET and PUT: re-GET (which
 		// carries the user's alarms over again) and retry once.
@@ -413,11 +436,14 @@ func (r *run) markSynced(ctx context.Context, m *store.Mapping, ev *calendar.Eve
 	if err := r.q.UpdateMapping(ctx, m); err != nil {
 		return err
 	}
+	if err := r.saveInstances(ctx, m, plan); err != nil {
+		return err
+	}
 	return r.maybeHideDeclined(ctx, m)
 }
 
 // adopt takes over an object already at our deterministic href (§8.6).
-func (r *run) adopt(ctx context.Context, m *store.Mapping, ev *calendar.Event) error {
+func (r *run) adopt(ctx context.Context, m *store.Mapping, ev *calendar.Event, exceptions []*calendar.Event) error {
 	obj, err := r.c.Get(ctx, m.ICloudHref)
 	if err != nil {
 		return fmt.Errorf("adopt get %s: %w", m.ICloudHref, err)
@@ -426,12 +452,12 @@ func (r *run) adopt(ctx context.Context, m *store.Mapping, ev *calendar.Event) e
 		r.log.ErrorContext(ctx, "object at our href has a different UID; not touching it", "href", m.ICloudHref, "google_id", ev.Id)
 		return r.markSkipped(ctx, m, ev, SkipHrefCollision)
 	}
-	return r.overwrite(ctx, m, ev, obj)
+	return r.overwrite(ctx, m, ev, exceptions, obj)
 }
 
 // adoptByUID merges a copy of the event the user imported elsewhere in the
 // calendar into the mirror (§8.6).
-func (r *run) adoptByUID(ctx context.Context, m *store.Mapping, ev *calendar.Event) error {
+func (r *run) adoptByUID(ctx context.Context, m *store.Mapping, ev *calendar.Event, exceptions []*calendar.Event) error {
 	obj, err := r.c.FindByUID(ctx, r.opts().CalendarHref, m.ICalUID)
 	if err != nil {
 		return fmt.Errorf("adopt by uid: %w", err)
@@ -440,14 +466,17 @@ func (r *run) adoptByUID(ctx context.Context, m *store.Mapping, ev *calendar.Eve
 	if err := r.q.UpdateMapping(ctx, m); err != nil {
 		return err
 	}
-	return r.overwrite(ctx, m, ev, obj)
+	return r.overwrite(ctx, m, ev, exceptions, obj)
 }
 
 // overwrite replaces obj with our rendering (keeping its alarms/Apple props)
 // and marks the mapping synced.
-func (r *run) overwrite(ctx context.Context, m *store.Mapping, ev *calendar.Event, obj *icloud.Object) error {
-	plan := r.planRSVP(ctx, m, ev, obj)
-	cal, hash, err := r.render(ev, m.ICalUID, m, obj, plan)
+func (r *run) overwrite(ctx context.Context, m *store.Mapping, ev *calendar.Event, exceptions []*calendar.Event, obj *icloud.Object) error {
+	plan, err := r.planRSVP(ctx, m, ev, exceptions, obj)
+	if err != nil {
+		return err
+	}
+	cal, hash, err := r.render(ev, exceptions, m.ICalUID, m, obj, plan)
 	if err != nil {
 		return r.markSkipped(ctx, m, ev, skipRenderPfx+err.Error())
 	}
@@ -544,4 +573,22 @@ func (r *run) goneFromGoogle(ctx context.Context, m *store.Mapping) error {
 		return r.q.UpdateMapping(ctx, m)
 	}
 	return nil
+}
+
+// retryInstanceRSVPs re-sends per-occurrence responses left pending.
+func (r *run) retryInstanceRSVPs(ctx context.Context, m *store.Mapping) error {
+	rows, err := r.q.ListInstanceStates(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, row := range rows {
+		if row.RSVPPending == "" {
+			continue
+		}
+		if _, err := r.pushInstance(ctx, m, row.RecurrenceID, row.GoogleEventID, row.RSVPPending); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

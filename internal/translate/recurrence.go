@@ -303,3 +303,41 @@ func overrideEvents(cal *ical.Calendar) map[string]*ical.Component {
 	}
 	return out
 }
+
+// OccurrenceKey returns the normalised RECURRENCE-ID key (as
+// NormalizeRecurrenceID and ExtractSelfStatus produce) of exception ex of
+// master: YYYYMMDD for all-day series, the original start in UTC otherwise.
+func OccurrenceKey(master, ex *calendar.Event) (string, bool) {
+	occ, ok := originalStart(ex)
+	if !ok {
+		return "", false
+	}
+	if master.Start != nil && master.Start.Date != "" {
+		d := occ.date
+		if d == "" {
+			d = occ.at.UTC().Format("2006-01-02")
+		}
+		t, err := time.Parse("2006-01-02", d)
+		if err != nil {
+			return "", false
+		}
+		return t.Format("20060102"), true
+	}
+	if occ.at.IsZero() {
+		return "", false
+	}
+	return occ.at.UTC().Format("20060102T150405Z"), true
+}
+
+// InstanceSuffix reports whether s looks like the suffix of a Google
+// instance id (YYYYMMDD or YYYYMMDDTHHMMSSZ).
+//
+// UNVERIFIED (P0-1 covered tombstones of single events only): Google's
+// instance ids are <masterId>_<suffix>.
+func InstanceSuffix(s string) bool {
+	if _, err := time.Parse("20060102T150405Z", s); err == nil {
+		return true
+	}
+	_, err := time.Parse("20060102", s)
+	return err == nil
+}
