@@ -277,9 +277,9 @@ func (r *run) pushInstance(ctx context.Context, m *store.Mapping, key, googleID,
 		id = row.GoogleEventID
 	}
 	if id == "" {
-		// UNVERIFIED (no Phase 0 item covered per-occurrence RSVP via the
-		// API): InstanceAt with an all-day series' date at 00:00Z, and the
-		// <master>_<key> instance id fallback.
+		// Verified for a timed series in the M13 trial (T10): the decline
+		// reached exactly the <master>_<key> instance. UNVERIFIED (M13):
+		// InstanceAt with an all-day series' date at 00:00Z.
 		at, ok := keyTime(key)
 		if !ok {
 			return "", fmt.Errorf("occurrence key %q", key)

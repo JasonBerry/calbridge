@@ -28,7 +28,15 @@ type Status struct {
 
 // CycleCounts summarises the last cycle.
 type CycleCounts struct {
-	Created, Updated, Adopted, Deleted, Unchanged, Skipped, UserDeleted, Failed, RSVPs int
+	Created     int `json:"created"`
+	Updated     int `json:"updated"`
+	Adopted     int `json:"adopted"`
+	Deleted     int `json:"deleted"`
+	Unchanged   int `json:"unchanged"`
+	Skipped     int `json:"skipped"`
+	UserDeleted int `json:"user_deleted"`
+	Failed      int `json:"failed"`
+	RSVPs       int `json:"rsvps_sent"`
 }
 
 // Server holds the latest status. Safe for concurrent use.

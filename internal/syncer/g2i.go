@@ -353,7 +353,8 @@ func (r *run) identity(ctx context.Context, m *store.Mapping, ev *calendar.Event
 	switch {
 	case err == nil && other.GoogleEventID != ev.Id:
 		// §7.1: a different Google event with an iCalUID we already map
-		// (UNVERIFIED: whether Google reuses UIDs on "this and following").
+		// The M13 trial (T13) showed Google gives the new series of a "this
+		// and following" change a new iCalUID, so this is a safety net.
 		domain := r.opts().SelfEmail[strings.LastIndex(r.opts().SelfEmail, "@")+1:]
 		uid = "calbridge-" + ev.Id + "@" + domain
 		r.log.WarnContext(ctx, "iCalUID already mapped to another event; using a calbridge UID", "google_id", ev.Id)

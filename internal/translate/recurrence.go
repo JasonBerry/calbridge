@@ -95,8 +95,9 @@ type occurrence struct {
 // the instance-id suffix _YYYYMMDD[THHMMSSZ] for bare cancelled tombstones
 // (§7.8 rule 4; only id/status/etag are guaranteed, P0-1).
 //
-// UNVERIFIED (P0-1 saw tombstones but not for instances): the instance-id
-// suffix format.
+// Verified in the M13 live trial (T12): a cancelled occurrence of a timed
+// series arrives as a bare tombstone whose id ends in _YYYYMMDDTHHMMSSZ.
+// UNVERIFIED (M13): the date-only suffix of all-day series.
 func originalStart(ex *calendar.Event) (occurrence, bool) {
 	if o := ex.OriginalStartTime; o != nil {
 		if o.Date != "" {
@@ -332,8 +333,8 @@ func OccurrenceKey(master, ex *calendar.Event) (string, bool) {
 // InstanceSuffix reports whether s looks like the suffix of a Google
 // instance id (YYYYMMDD or YYYYMMDDTHHMMSSZ).
 //
-// UNVERIFIED (P0-1 covered tombstones of single events only): Google's
-// instance ids are <masterId>_<suffix>.
+// Google's instance ids are <masterId>_<suffix> (verified in the M13 live
+// trial, T10/T12, for timed series; the all-day form is UNVERIFIED (M13)).
 func InstanceSuffix(s string) bool {
 	if _, err := time.Parse("20060102T150405Z", s); err == nil {
 		return true
