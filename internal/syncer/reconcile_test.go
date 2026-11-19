@@ -218,3 +218,19 @@ func (h *harness) mappingOrHref(t *testing.T, id string) string {
 	ev := h.g.Event(id)
 	return hrefForUID(ev.ICalUID)
 }
+
+// TestReconcileOrphansSharingAnID: Phase 0 left several objects with the
+// same X-CALBRIDGE-GID; all of them must be deletable in one run.
+func TestReconcileOrphansSharingAnID(t *testing.T) {
+	h := newHarness(t)
+	for i := 0; i < 3; i++ {
+		h.c.Import(fmt.Sprintf("%scalbridge-p0-%d.ics", calHref, i), []byte(fmt.Sprintf(
+			"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:p0-%d@calbridge.invalid\r\n"+
+				"DTSTAMP:20261118T000000Z\r\nDTSTART:20261125T000000Z\r\nDTEND:20261125T010000Z\r\n"+
+				"X-CALBRIDGE-GID:phase0-test\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n", i)))
+	}
+	p := h.reconcile(ReconcileOptions{Apply: true, DeleteOrphans: true})
+	if p.Count(ActOrphan) != 3 || len(h.c.Hrefs()) != 0 {
+		t.Fatalf("plan %+v, left %v", p.Items, h.c.Hrefs())
+	}
+}

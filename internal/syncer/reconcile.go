@@ -407,13 +407,11 @@ func (r *run) adoptInPlace(ctx context.Context, s reconSeries, m *store.Mapping,
 // deleteOrphan removes a calbridge-owned object whose Google event is gone,
 // through deleteMirror (rule 5).
 func (r *run) deleteOrphan(ctx context.Context, ob *icloud.Object) error {
-	gid := googleIDOf(ob.Cal)
-	if gid == "" {
-		gid = "orphan:" + path.Base(ob.Href)
-	}
 	m, err := r.q.GetMappingByHref(ctx, r.opts().CalendarHref, ob.Href)
 	if store.IsNotFound(err) {
-		m = store.Mapping{GoogleCalendarID: r.opts().GoogleCalendarID, GoogleEventID: gid, ICalUID: uidOf(ob.Cal),
+		// Keyed by href: several orphans can carry the same (or no)
+		// X-CALBRIDGE-GID, and a mapping per Google id must be unique.
+		m = store.Mapping{GoogleCalendarID: r.opts().GoogleCalendarID, GoogleEventID: "orphan:" + path.Base(ob.Href), ICalUID: uidOf(ob.Cal),
 			ICloudCalendar: r.opts().CalendarHref, ICloudHref: ob.Href, State: store.StatePendingPut}
 		if err := r.q.CreateMapping(ctx, &m); err != nil {
 			return err
